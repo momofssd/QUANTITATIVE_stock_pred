@@ -25,7 +25,8 @@ import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyBboxPatch
-from datetime import datetime, timedelta
+from datetime import datetime
+from pandas.tseries.offsets import BDay
 import ta
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
@@ -39,11 +40,12 @@ import textwrap
 # ─────────────────────────────────────────────
 # CONFIG  — change TICKER here
 # ─────────────────────────────────────────────
-TICKER          = "SMH"
+TICKER          = "QQQ"
 PREDICTION_DAYS = 30          # forward window for trend prediction
 TRAIN_RATIO     = 0.80        # 80 % train / 20 % validation
 LOOKBACK        = 20          # rolling-window base for features
 SUPPORT_RES_WIN = 10          # local extrema window
+Z_SCORE_WINDOWS = [20, 50, 100]
 
 COLORS = {
     "bg":      "#0d1117",
@@ -173,6 +175,11 @@ def fetch_data(ticker: str) -> pd.DataFrame:
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     print("\n[2/4] Computing technical indicators & features …")
 
+    def rolling_zscore(series: pd.Series, window: int) -> pd.Series:
+        mean = series.rolling(window).mean()
+        std = series.rolling(window).std()
+        return (series - mean) / std.replace(0, np.nan)
+
     # ── Trend / Moving Averages ──
     for w in [5, 10, 20, 50, 100, 200]:
         df[f"SMA_{w}"]  = ta.trend.sma_indicator(df["Close"], window=w)
@@ -216,6 +223,13 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df["High_Low_pct"]  = (df["High"] - df["Low"]) / df["Close"]
     df["Close_Open_pct"]= (df["Close"] - df["Open"]) / df["Open"]
 
+    # Rolling z-scores measure how extended price, returns, and volume are
+    # compared with their own recent history.
+    for w in Z_SCORE_WINDOWS:
+        df[f"Close_Z_{w}"]  = rolling_zscore(df["Close"], w)
+        df[f"Return_Z_{w}"] = rolling_zscore(df["Log_return"], w)
+        df[f"Volume_Z_{w}"] = rolling_zscore(df["Volume"], w)
+
     # ── Trend strength ──
     adx_ind             = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"])
     df["ADX"]           = adx_ind.adx()
@@ -233,6 +247,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df["Target"]        = (df["Future_close"] > df["Close"]).astype(int)
 
     feature_cols = [c for c in df.columns if c not in ("Future_close", "Target")]
+    df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], np.nan)
     df.dropna(subset=feature_cols, inplace=True)
     print(f"  ✓  {df.shape[1]} columns  |  {len(df):,} usable rows after dropna")
     return df
@@ -358,6 +373,9 @@ def make_prediction(models, scaler, feature_cols,
     adx          = float(df["ADX"].iloc[-1])
     bb_width     = float(df["BB_width"].iloc[-1])
     hist_vol     = float(df["Volatility_20d"].iloc[-1])
+    close_z_20   = float(df["Close_Z_20"].iloc[-1])
+    return_z_20  = float(df["Return_Z_20"].iloc[-1])
+    volume_z_20  = float(df["Volume_Z_20"].iloc[-1])
 
     print(f"\n  DEBUG — Last price used in prediction : ${last_price:.2f}")
     print(f"  DEBUG — Last date in df               : {df.index[-1].date()}")
@@ -366,7 +384,9 @@ def make_prediction(models, scaler, feature_cols,
     adx_factor     = min(adx / 25, 2.0)
     conf_factor    = confidence
     base_move_pct  = hist_vol / np.sqrt(252 / PREDICTION_DAYS)
-    target_move    = last_price * base_move_pct * adx_factor * conf_factor
+    z_alignment    = (-close_z_20 / 2) if trend == "BULLISH" else (close_z_20 / 2)
+    z_factor       = float(np.clip(1 + 0.15 * z_alignment, 0.85, 1.15))
+    target_move    = last_price * base_move_pct * adx_factor * conf_factor * z_factor
 
     if trend == "BULLISH":
         price_target = last_price + target_move
@@ -378,8 +398,15 @@ def make_prediction(models, scaler, feature_cols,
     # ── Trend duration ──
     base_dur   = PREDICTION_DAYS
     dur_factor = min(adx / 20, 2.5)
-    est_days   = max(5, int(base_dur * dur_factor * conf_factor))
-    est_end    = df.index[-1] + timedelta(days=est_days)
+    est_days   = max(5, int(base_dur * dur_factor * conf_factor * z_factor))
+    est_end    = df.index[-1] + BDay(est_days)
+
+    if close_z_20 >= 2:
+        z_state = "stretched high"
+    elif close_z_20 <= -2:
+        z_state = "stretched low"
+    else:
+        z_state = "normal range"
 
     # ── Support / Resistance ──
     supports, resistances = find_support_resistance(df["Close"])
@@ -400,6 +427,11 @@ def make_prediction(models, scaler, feature_cols,
         "adx":             adx,
         "bb_width":        bb_width,
         "hist_vol":        hist_vol,
+        "close_z_20":      close_z_20,
+        "return_z_20":     return_z_20,
+        "volume_z_20":     volume_z_20,
+        "z_factor":        z_factor,
+        "z_state":         z_state,
         "near_sup":        near_sup,
         "near_res":        near_res,
         "all_supports":    supports[-5:],
@@ -417,6 +449,7 @@ def print_conclusion(c: dict, metrics: dict):
     print(f"{'═'*56}")
     trend_sym = "▲ BULLISH" if c["trend"] == "BULLISH" else "▼ BEARISH"
     print(f"  Trend        : {trend_sym}")
+    print(f"  Time Frame   : The model predicts {c['ticker']} will be {c['trend']} for the next ~{c['est_days']} trading days (≈ {c['est_end'].date()})")
     print(f"  Confidence   : {c['confidence']*100:.1f}%")
     print(f"  Last Price   : ${c['last_price']:.2f}")
     print(f"  Price Target : ${c['price_target']:.2f}  "
@@ -429,6 +462,8 @@ def print_conclusion(c: dict, metrics: dict):
           f"({'Strong' if c['adx']>25 else 'Moderate' if c['adx']>20 else 'Weak'} trend)")
     print(f"  ATR (vol)    : ${c['atr']:.2f}")
     print(f"  Hist Vol     : {c['hist_vol']*100:.1f}% annualised")
+    print(f"  Z-Score 20d  : {c['close_z_20']:+.2f}  ({c['z_state']}, target/duration factor {c['z_factor']:.2f}x)")
+    print(f"  Return Z 20d : {c['return_z_20']:+.2f}  |  Volume Z 20d : {c['volume_z_20']:+.2f}")
     if c["near_sup"]: print(f"  Support      : ${c['near_sup']:.2f}")
     if c["near_res"]: print(f"  Resistance   : ${c['near_res']:.2f}")
     print(f"\n  Model Performance (validation set):")
@@ -684,7 +719,7 @@ def plot_all(df: pd.DataFrame, split: int, dates_val,
     trend_col = COLORS["green"] if c["trend"] == "BULLISH" else COLORS["red"]
     trend_sym  = "▲" if c["trend"] == "BULLISH" else "▼"
 
-    ax9.text(0.5, 0.88, f"{trend_sym}  {c['ticker']} — {c['trend']} TREND  {trend_sym}",
+    ax9.text(0.5, 0.88, f"{trend_sym}  {c['ticker']} — {c['trend']} TREND FOR NEXT ~{c['est_days']} DAYS  {trend_sym}",
              ha="center", va="center", fontsize=16, fontweight="bold",
              color=trend_col, transform=ax9.transAxes)
 
