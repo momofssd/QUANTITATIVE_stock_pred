@@ -40,12 +40,13 @@ import textwrap
 # ─────────────────────────────────────────────
 # CONFIG  — change TICKER here
 # ─────────────────────────────────────────────
-TICKER          = "QQQ"
+TICKER          = "CRCL"
 PREDICTION_DAYS = 30          # forward window for trend prediction
 TRAIN_RATIO     = 0.80        # 80 % train / 20 % validation
 LOOKBACK        = 20          # rolling-window base for features
 SUPPORT_RES_WIN = 10          # local extrema window
 Z_SCORE_WINDOWS = [20, 50, 100]
+MIN_TRAIN_ROWS  = 20          # minimum labeled rows needed after feature filtering
 
 COLORS = {
     "bg":      "#0d1117",
@@ -248,8 +249,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     feature_cols = [c for c in df.columns if c not in ("Future_close", "Target")]
     df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], np.nan)
-    df.dropna(subset=feature_cols, inplace=True)
-    print(f"  ✓  {df.shape[1]} columns  |  {len(df):,} usable rows after dropna")
+    labeled_rows = int(df["Future_close"].notna().sum())
+    print(f"  ✓  {df.shape[1]} columns  |  {len(df):,} rows, {labeled_rows:,} labeled for training")
     return df
 
 
@@ -259,16 +260,38 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 def train_and_validate(df: pd.DataFrame):
     print("\n[3/4] Training & validating model …")
 
-    train_df = df.dropna(subset=["Future_close"])
+    candidate_features = [c for c in df.columns
+                          if c not in ("Open","High","Low","Close","Volume",
+                                       "Future_close","Target")]
+    labeled_df = df.dropna(subset=["Future_close"]).copy()
 
-    feature_cols = [c for c in df.columns
-                    if c not in ("Open","High","Low","Close","Volume",
-                                 "Future_close","Target")]
+    usable_features = []
+    dropped_features = []
+    for col in candidate_features:
+        has_latest_value = pd.notna(df[col].iloc[-1])
+        labeled_count = int(labeled_df[col].notna().sum())
+        if has_latest_value and labeled_count >= MIN_TRAIN_ROWS:
+            usable_features.append(col)
+        else:
+            dropped_features.append(col)
+
+    train_df = labeled_df.dropna(subset=usable_features)
+    if len(train_df) < MIN_TRAIN_ROWS:
+        raise ValueError(
+            f"Not enough labeled rows to train after feature filtering: "
+            f"{len(train_df)} available, {MIN_TRAIN_ROWS} required. "
+            f"Use a ticker with more history or reduce PREDICTION_DAYS."
+        )
+
+    feature_cols = usable_features
+    if dropped_features:
+        print(f"  ℹ  Dropped {len(dropped_features)} sparse feature(s) for this short history")
     X = train_df[feature_cols].values
     y = train_df["Target"].values
     dates = train_df.index
 
     split = int(len(X) * TRAIN_RATIO)
+    split = min(max(split, 1), len(X) - 1)
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
     dates_val       = dates[split:]
@@ -286,7 +309,7 @@ def train_and_validate(df: pd.DataFrame):
             random_state=42, verbosity=0),
         "RandomForest": RandomForestClassifier(
             n_estimators=300, max_depth=8, min_samples_leaf=5,
-            random_state=42, n_jobs=-1),
+            random_state=42, n_jobs=1),
         "GradBoost": GradientBoostingClassifier(
             n_estimators=200, max_depth=4, learning_rate=0.08,
             subsample=0.8, random_state=42),
@@ -521,18 +544,19 @@ def plot_all(df: pd.DataFrame, split: int, dates_val,
     close   = df["Close"]
     dates   = df.index
     
-    # Train/Val split applies only to data with valid Future_close
-    labeled_dates = df.dropna(subset=["Future_close"]).index
-    train_d = labeled_dates[:split]
-    val_d   = labeled_dates[split:]
+    # Train/Val split applies to the filtered rows actually used by the model.
+    val_d = pd.DatetimeIndex(dates_val)
+    split_date = val_d[0]
+    train_mask = dates < split_date
+    val_mask = dates >= split_date
 
     # ─────────────────────────────────────────
     # CHART 1 — Full price + MAs (spans 3 cols)
     # ─────────────────────────────────────────
     ax1 = fig.add_subplot(gs[0, :])
-    ax1.plot(train_d, close[:split], color=COLORS["blue"],
+    ax1.plot(dates[train_mask], close[train_mask], color=COLORS["blue"],
              linewidth=1.2, label="Train", alpha=0.9)
-    ax1.plot(dates[split:], close[split:], color=COLORS["purple"],
+    ax1.plot(dates[val_mask], close[val_mask], color=COLORS["purple"],
              linewidth=1.4, label="Validation & Recent", alpha=0.9)
     ax1.plot(dates, df["SMA_50"],  color=COLORS["orange"],
              linewidth=0.8, alpha=0.7, label="SMA 50")
