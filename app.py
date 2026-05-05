@@ -29,7 +29,8 @@ CORS(app)
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-PREDICTION_DAYS = 30
+PREDICTION_DAYS = 5
+MIN_TARGET_MOVE = 0.005
 TRAIN_RATIO     = 0.80
 LOOKBACK        = 20
 SUPPORT_RES_WIN = 10
@@ -169,19 +170,31 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         df[f"High_{w}d"]       = df["High"].rolling(w).max()
         df[f"Low_{w}d"]        = df["Low"].rolling(w).min()
 
-    df["Future_close"]  = df["Close"].shift(-PREDICTION_DAYS)
-    df["Target"]        = (df["Future_close"] > df["Close"]).astype(int)
+    df["Future_close"]     = df["Close"].shift(-PREDICTION_DAYS)
+    df["Future_avg_close"] = (
+        df["Close"]
+        .shift(-1)
+        .rolling(PREDICTION_DAYS)
+        .mean()
+        .shift(-(PREDICTION_DAYS - 1))
+    )
+    df["Future_avg_return"] = (df["Future_avg_close"] - df["Close"]) / df["Close"]
+    df["Target"] = np.where(
+        df["Future_avg_return"] > MIN_TARGET_MOVE,
+        1,
+        np.where(df["Future_avg_return"] < -MIN_TARGET_MOVE, 0, np.nan),
+    )
 
-    feature_cols = [c for c in df.columns if c not in ("Future_close", "Target")]
+    feature_cols = [c for c in df.columns if c not in ("Future_close", "Future_avg_close", "Future_avg_return", "Target")]
     df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], np.nan)
     df.dropna(subset=feature_cols, inplace=True)
     return df
 
 def train_and_validate(df: pd.DataFrame):
-    train_df = df.dropna(subset=["Future_close"])
-    feature_cols = [c for c in df.columns if c not in ("Open","High","Low","Close","Volume","Future_close","Target")]
+    train_df = df.dropna(subset=["Target"])
+    feature_cols = [c for c in df.columns if c not in ("Open","High","Low","Close","Volume","Future_close","Future_avg_close","Future_avg_return","Target")]
     X = train_df[feature_cols].values
-    y = train_df["Target"].values
+    y = train_df["Target"].astype(int).values
     dates = train_df.index
 
     split = int(len(X) * TRAIN_RATIO)
@@ -211,6 +224,25 @@ def train_and_validate(df: pd.DataFrame):
     probas_val = {}
     metrics    = {}
 
+    def balanced_accuracy_for_threshold(y_true, probabilities, threshold):
+        y_true = np.asarray(y_true)
+        pred = (probabilities >= threshold).astype(int)
+        pos_mask = y_true == 1
+        neg_mask = y_true == 0
+        if pos_mask.sum() == 0 or neg_mask.sum() == 0:
+            return accuracy_score(y_true, pred)
+        bullish_recall = ((pred == 1) & pos_mask).sum() / pos_mask.sum()
+        bearish_recall = ((pred == 0) & neg_mask).sum() / neg_mask.sum()
+        return float((bullish_recall + bearish_recall) / 2)
+
+    def tune_decision_threshold(y_true, probabilities):
+        if len(np.unique(y_true)) < 2:
+            return 0.5, balanced_accuracy_for_threshold(y_true, probabilities, 0.5)
+        bullish_rate = float(np.mean(y_true))
+        threshold = float(np.quantile(probabilities, 1 - bullish_rate))
+        threshold = float(np.clip(threshold, 0.05, 0.95))
+        return threshold, balanced_accuracy_for_threshold(y_true, probabilities, threshold)
+
     for name, mdl in models.items():
         mdl.fit(X_train_s, y_train)
         p = mdl.predict(X_val_s)
@@ -222,10 +254,11 @@ def train_and_validate(df: pd.DataFrame):
         metrics[name] = {"acc": acc, "auc": auc}
 
     ensemble_proba = np.mean([probas_val[n] for n in models], axis=0)
-    ensemble_pred  = (ensemble_proba >= 0.5).astype(int)
+    decision_threshold, balanced_acc = tune_decision_threshold(y_val, ensemble_proba)
+    ensemble_pred  = (ensemble_proba >= decision_threshold).astype(int)
     ens_acc = accuracy_score(y_val, ensemble_pred)
     ens_auc = roc_auc_score(y_val, ensemble_proba)
-    metrics["Ensemble"] = {"acc": ens_acc, "auc": ens_auc}
+    metrics["Ensemble"] = {"acc": ens_acc, "auc": ens_auc, "balanced_acc": balanced_acc}
 
     for name, mdl in models.items():
         mdl.fit(scaler.transform(X), y)
@@ -233,7 +266,7 @@ def train_and_validate(df: pd.DataFrame):
     fi = dict(zip(feature_cols, models["XGBoost"].feature_importances_))
     top_features = sorted(fi.items(), key=lambda x: x[1], reverse=True)[:15]
 
-    return (models, scaler, feature_cols, df, split, dates_val, preds_val, probas_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features)
+    return (models, scaler, feature_cols, df, split, dates_val, preds_val, probas_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features, decision_threshold)
 
 def find_support_resistance(price_data, window: int = SUPPORT_RES_WIN, tolerance: float = 0.015):
     if isinstance(price_data, pd.DataFrame):
@@ -299,14 +332,18 @@ def find_support_resistance(price_data, window: int = SUPPORT_RES_WIN, tolerance
     resistances = [level["level"] for level in resistance_details]
     return supports, resistances, support_details, resistance_details
 
-def make_prediction(ticker: str, models, scaler, feature_cols, df: pd.DataFrame, ensemble_proba, y_val):
+def make_prediction(ticker: str, models, scaler, feature_cols, df: pd.DataFrame, ensemble_proba, y_val, decision_threshold: float):
     last_row    = df[feature_cols].iloc[-1:].values
     last_scaled = scaler.transform(last_row)
 
     model_probas = [m.predict_proba(last_scaled)[0, 1] for m in models.values()]
     final_prob   = float(np.mean(model_probas))
-    trend        = "BULLISH" if final_prob >= 0.5 else "BEARISH"
-    confidence   = final_prob if trend == "BULLISH" else 1 - final_prob
+    trend        = "BULLISH" if final_prob >= decision_threshold else "BEARISH"
+    if trend == "BULLISH":
+        confidence = 0.5 + 0.5 * ((final_prob - decision_threshold) / max(1 - decision_threshold, 1e-9))
+    else:
+        confidence = 0.5 + 0.5 * ((decision_threshold - final_prob) / max(decision_threshold, 1e-9))
+    confidence = float(np.clip(confidence, 0.5, 1.0))
 
     last_price   = float(df["Close"].iloc[-1])
     atr          = float(df["ATR"].iloc[-1])
@@ -360,6 +397,7 @@ def make_prediction(ticker: str, models, scaler, feature_cols, df: pd.DataFrame,
         "trend":           trend,
         "confidence":      float(confidence),
         "final_prob":      float(final_prob),
+        "decision_threshold": float(decision_threshold),
         "last_price":      float(last_price),
         "price_target":    float(price_target),
         "stop_loss":       float(stop_loss),
@@ -398,8 +436,8 @@ def _safe_float(value):
         return None
     return float(value)
 
-def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pred, ensemble_proba, y_val, metrics: dict, top_features: list, feature_cols: list):
-    labeled_dates = df.dropna(subset=["Future_close"]).index
+def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pred, ensemble_proba, y_val, metrics: dict, top_features: list, feature_cols: list, decision_threshold: float):
+    labeled_dates = df.dropna(subset=["Target"]).index
     train_dates = set(labeled_dates[:split])
     validation_dates = set(labeled_dates[split:])
 
@@ -417,20 +455,54 @@ def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pr
             "close": _safe_float(row["Close"]),
             "sma50": _safe_float(row.get("SMA_50")),
             "sma200": _safe_float(row.get("SMA_200")),
+            "rsi": _safe_float(row.get("RSI")),
+            "macd": _safe_float(row.get("MACD")),
+            "macd_signal": _safe_float(row.get("MACD_signal")),
+            "macd_hist": _safe_float(row.get("MACD_hist")),
             "phase": phase,
         })
 
     validation_records = []
-    val_close = df.loc[dates_val, "Close"]
-    for date, close, pred, prob, actual in zip(dates_val, val_close, ensemble_pred, ensemble_proba, y_val):
+    val_rows = df.loc[dates_val, ["Close", "Future_avg_close"]]
+    for date, row, pred, prob, actual in zip(dates_val, val_rows.itertuples(), ensemble_pred, ensemble_proba, y_val):
+        close = float(row.Close)
+        future_avg_close = float(row.Future_avg_close)
         validation_records.append({
             "date": date.date().isoformat(),
             "close": _safe_float(close),
+            "future_avg_close": _safe_float(future_avg_close),
+            "actual_move_pct": _safe_float((future_avg_close - close) / close),
             "probability": _safe_float(prob),
             "correct": bool(pred == actual),
             "prediction": int(pred),
             "actual": int(actual),
+            "actual_trend": "BULLISH" if int(actual) == 1 else "BEARISH",
+            "prediction_trend": "BULLISH" if int(pred) == 1 else "BEARISH",
         })
+
+    def prediction_class_stats(prediction_value: int):
+        records = [record for record in validation_records if record["prediction"] == prediction_value]
+        correct = sum(1 for record in records if record["correct"])
+        total = len(records)
+        return {
+            "calls": int(total),
+            "correct": int(correct),
+            "wrong": int(total - correct),
+            "accuracy": _safe_float(correct / total if total else None),
+        }
+
+    total_correct = sum(1 for record in validation_records if record["correct"])
+    validation_stats = {
+        "total": int(len(validation_records)),
+        "correct": int(total_correct),
+        "wrong": int(len(validation_records) - total_correct),
+        "accuracy": _safe_float(total_correct / len(validation_records) if validation_records else None),
+        "decision_threshold": _safe_float(decision_threshold),
+        "actual_bullish": int(sum(1 for record in validation_records if record["actual"] == 1)),
+        "actual_bearish": int(sum(1 for record in validation_records if record["actual"] == 0)),
+        "predicted_bullish": prediction_class_stats(1),
+        "predicted_bearish": prediction_class_stats(0),
+    }
 
     model_metrics = [
         {
@@ -454,6 +526,7 @@ def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pr
             "total_records": int(len(df)),
             "train_records": int(split),
             "validation_records": int(len(dates_val)),
+            "neutral_records": int(df["Future_avg_close"].notna().sum() - df["Target"].notna().sum()),
             "feature_count": int(len(feature_cols)),
             "start_date": df.index[0].date().isoformat(),
             "end_date": df.index[-1].date().isoformat(),
@@ -467,6 +540,7 @@ def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pr
         ],
         "price_series": _sample_records(price_records, 260),
         "validation_series": _sample_records(validation_records, 180),
+        "validation_stats": validation_stats,
         "metrics": model_metrics,
         "feature_importance": feature_importance,
     }
@@ -494,7 +568,7 @@ def plot_all(ticker: str, df: pd.DataFrame, split: int, dates_val, ensemble_pred
 
     close   = df["Close"]
     dates   = df.index
-    labeled_dates = df.dropna(subset=["Future_close"]).index
+    labeled_dates = df.dropna(subset=["Target"]).index
     train_d = labeled_dates[:split]
     val_d   = labeled_dates[split:]
 
@@ -648,9 +722,9 @@ def run_prediction(ticker: str):
     ticker = ticker.upper()
     df = fetch_data(ticker)
     df = add_features(df)
-    models, scaler, feature_cols, df, split, dates_val, preds_val, probas_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features = train_and_validate(df)
-    conclusion = make_prediction(ticker, models, scaler, feature_cols, df, ensemble_proba, y_val)
-    training_progress = build_training_progress(df, split, dates_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features, feature_cols)
+    models, scaler, feature_cols, df, split, dates_val, preds_val, probas_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features, decision_threshold = train_and_validate(df)
+    conclusion = make_prediction(ticker, models, scaler, feature_cols, df, ensemble_proba, y_val, decision_threshold)
+    training_progress = build_training_progress(df, split, dates_val, ensemble_pred, ensemble_proba, y_val, metrics, top_features, feature_cols, decision_threshold)
     return conclusion, training_progress
 
 @app.route('/api/predict', methods=['POST'])

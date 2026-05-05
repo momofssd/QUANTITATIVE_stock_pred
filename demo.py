@@ -41,7 +41,8 @@ import textwrap
 # CONFIG  — change TICKER here
 # ─────────────────────────────────────────────
 TICKER          = "CRCL"
-PREDICTION_DAYS = 30          # forward window for trend prediction
+PREDICTION_DAYS = 5           # forward window for weekly trend prediction
+MIN_TARGET_MOVE = 0.005       # ignore tiny weekly moves as neutral noise
 TRAIN_RATIO     = 0.80        # 80 % train / 20 % validation
 LOOKBACK        = 20          # rolling-window base for features
 SUPPORT_RES_WIN = 10          # local extrema window
@@ -243,13 +244,25 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         df[f"High_{w}d"]       = df["High"].rolling(w).max()
         df[f"Low_{w}d"]        = df["Low"].rolling(w).min()
 
-    # ── TARGET: will price be higher in PREDICTION_DAYS? ──
-    df["Future_close"]  = df["Close"].shift(-PREDICTION_DAYS)
-    df["Target"]        = (df["Future_close"] > df["Close"]).astype(int)
+    # ── TARGET: will the average future price be higher over PREDICTION_DAYS? ──
+    df["Future_close"]     = df["Close"].shift(-PREDICTION_DAYS)
+    df["Future_avg_close"] = (
+        df["Close"]
+        .shift(-1)
+        .rolling(PREDICTION_DAYS)
+        .mean()
+        .shift(-(PREDICTION_DAYS - 1))
+    )
+    df["Future_avg_return"] = (df["Future_avg_close"] - df["Close"]) / df["Close"]
+    df["Target"] = np.where(
+        df["Future_avg_return"] > MIN_TARGET_MOVE,
+        1,
+        np.where(df["Future_avg_return"] < -MIN_TARGET_MOVE, 0, np.nan),
+    )
 
-    feature_cols = [c for c in df.columns if c not in ("Future_close", "Target")]
+    feature_cols = [c for c in df.columns if c not in ("Future_close", "Future_avg_close", "Future_avg_return", "Target")]
     df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], np.nan)
-    labeled_rows = int(df["Future_close"].notna().sum())
+    labeled_rows = int(df["Target"].notna().sum())
     print(f"  ✓  {df.shape[1]} columns  |  {len(df):,} rows, {labeled_rows:,} labeled for training")
     return df
 
@@ -262,8 +275,8 @@ def train_and_validate(df: pd.DataFrame):
 
     candidate_features = [c for c in df.columns
                           if c not in ("Open","High","Low","Close","Volume",
-                                       "Future_close","Target")]
-    labeled_df = df.dropna(subset=["Future_close"]).copy()
+                                       "Future_close","Future_avg_close","Future_avg_return","Target")]
+    labeled_df = df.dropna(subset=["Target"]).copy()
 
     usable_features = []
     dropped_features = []
@@ -287,7 +300,7 @@ def train_and_validate(df: pd.DataFrame):
     if dropped_features:
         print(f"  ℹ  Dropped {len(dropped_features)} sparse feature(s) for this short history")
     X = train_df[feature_cols].values
-    y = train_df["Target"].values
+    y = train_df["Target"].astype(int).values
     dates = train_df.index
 
     split = int(len(X) * TRAIN_RATIO)

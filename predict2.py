@@ -42,7 +42,7 @@ import textwrap
 # CONFIG  — change TICKER here
 # ─────────────────────────────────────────────
 TICKER          = "SMH"
-PREDICTION_DAYS = 30          # forward window for trend prediction
+PREDICTION_DAYS = 5           # forward window for weekly trend prediction
 TRAIN_RATIO     = 0.80        # 80 % train / 20 % validation
 LOOKBACK        = 20          # rolling-window base for features
 SUPPORT_RES_WIN = 10          # local extrema window

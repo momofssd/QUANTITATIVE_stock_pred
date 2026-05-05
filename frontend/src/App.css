@@ -231,6 +231,40 @@ main {
   font-size: 13px;
 }
 
+.validation-call-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid #e2e4de;
+  background: #f8faf5;
+}
+
+.validation-call-stats > div {
+  min-width: 0;
+  padding: 12px 18px 14px;
+  text-align: left;
+}
+
+.validation-call-stats > div + div {
+  border-left: 1px solid #e2e4de;
+}
+
+.validation-call-stats span,
+.validation-call-stats small {
+  display: block;
+  color: #647069;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.validation-call-stats strong {
+  display: block;
+  margin: 2px 0;
+  color: #16351f;
+  font-size: 24px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -267,6 +301,23 @@ main {
   background: #263238;
 }
 
+.legend .rsi::before {
+  background: #7b3fc7;
+}
+
+.legend .macd::before {
+  background: #0066b3;
+}
+
+.legend .macd-signal::before {
+  background: #d16600;
+}
+
+.legend .macd-hist::before {
+  height: 8px;
+  background: linear-gradient(90deg, #007a33 0 50%, #b00020 50% 100%);
+}
+
 .validation-legend .probability::before {
   background: #004f2d;
 }
@@ -286,7 +337,38 @@ main {
 }
 
 .validation-legend .wrong-key::before {
-  background: rgba(176, 0, 32, 0.34);
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #b00020;
+}
+
+.validation-legend .missed-bullish-key::before {
+  width: 0;
+  height: 0;
+  border-right: 6px solid transparent;
+  border-bottom: 12px solid #007a33;
+  border-left: 6px solid transparent;
+  background: transparent;
+}
+
+.validation-legend .missed-bearish-key::before {
+  width: 0;
+  height: 0;
+  border-top: 12px solid #b00020;
+  border-right: 6px solid transparent;
+  border-left: 6px solid transparent;
+  background: transparent;
+}
+
+.validation-legend .actual-bullish-key::before {
+  height: 8px;
+  background: #007a33;
+}
+
+.validation-legend .actual-bearish-key::before {
+  height: 8px;
+  background: #b00020;
 }
 
 .chart-svg {
@@ -311,10 +393,101 @@ main {
   stroke-width: 1.8;
 }
 
+.zero-line {
+  stroke: #4f5d54;
+  stroke-width: 1.6;
+}
+
+.split-line {
+  stroke: #6f7c73;
+  stroke-dasharray: 4 5;
+  stroke-width: 1.4;
+  opacity: 0.7;
+}
+
+.soft-threshold {
+  stroke-width: 1.2;
+  opacity: 0.72;
+}
+
+.rsi-line {
+  stroke: #7b3fc7;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.macd-line {
+  stroke: #0066b3;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.macd-signal-line {
+  stroke: #d16600;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.macd-hist-positive {
+  fill: rgba(0, 122, 51, 0.46);
+}
+
+.macd-hist-negative {
+  fill: rgba(176, 0, 32, 0.46);
+}
+
+.probability-line {
+  stroke: #004f2d;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .axis-label {
   fill: #3f4d44;
   font-size: 12px;
   font-weight: 650;
+}
+
+.lane-label {
+  fill: #526057;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.actual-bullish-bar {
+  fill: #007a33;
+}
+
+.actual-bearish-bar {
+  fill: #b00020;
+}
+
+.hit-dot {
+  fill: #ffffff;
+  stroke: #007a33;
+  stroke-width: 1.6;
+}
+
+.miss-dot {
+  fill: #ffffff;
+  stroke: #b00020;
+  stroke-width: 2.1;
+}
+
+.miss-actual-bullish {
+  fill: #ffffff;
+  stroke: #007a33;
+  stroke-width: 2.4;
+}
+
+.miss-actual-bearish {
+  fill: #ffffff;
+  stroke: #b00020;
+  stroke-width: 2.4;
 }
 
 .correct-band {

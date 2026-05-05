@@ -1,0 +1,11 @@
+numpy
+pandas
+matplotlib
+ta
+scikit-learn
+xgboost
+scipy
+yfinance
+Flask
+Flask-CORS
+gunicorn
