@@ -23,8 +23,12 @@ from flask_cors import CORS
 import warnings
 warnings.filterwarnings("ignore")
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="frontend/dist", static_url_path="/")
 CORS(app)
+
+@app.route("/")
+def serve_frontend():
+    return app.send_static_file("index.html")
 
 # ─────────────────────────────────────────────
 # CONFIG
