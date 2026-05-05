@@ -23,7 +23,11 @@ from flask_cors import CORS
 import warnings
 warnings.filterwarnings("ignore")
 
-app = Flask(__name__, static_folder="frontend/dist")
+import os
+
+basedir = os.path.abspath(os.path.dirname(__file__))
+dist_folder = os.path.join(basedir, "frontend", "dist")
+app = Flask(__name__, static_folder=dist_folder)
 CORS(app)
 
 @app.route("/", defaults={"path": ""})
@@ -31,8 +35,15 @@ CORS(app)
 def serve_frontend(path):
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
-    else:
+    elif os.path.exists(os.path.join(app.static_folder, "index.html")):
         return send_from_directory(app.static_folder, "index.html")
+    else:
+        # Debugging information if index.html is missing
+        if os.path.exists(app.static_folder):
+            contents = os.listdir(app.static_folder)
+            return f"index.html not found in {app.static_folder}. Directory contents: {contents}", 404
+        else:
+            return f"Static folder {app.static_folder} does not exist. Current dir: {os.getcwd()}, Base dir: {basedir}", 404
 
 # ─────────────────────────────────────────────
 # CONFIG
