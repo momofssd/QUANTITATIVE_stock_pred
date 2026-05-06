@@ -8,3 +8,4 @@ scipy
 yfinance
 Flask
 Flask-CORS
+gunicorn
