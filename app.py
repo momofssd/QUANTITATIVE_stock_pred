@@ -30,21 +30,6 @@ dist_folder = os.path.join(basedir, "frontend", "dist")
 app = Flask(__name__, static_folder=dist_folder)
 CORS(app)
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def serve_frontend(path):
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    elif os.path.exists(os.path.join(app.static_folder, "index.html")):
-        return send_from_directory(app.static_folder, "index.html")
-    else:
-        # Debugging information if index.html is missing
-        if os.path.exists(app.static_folder):
-            contents = os.listdir(app.static_folder)
-            return f"index.html not found in {app.static_folder}. Directory contents: {contents}", 404
-        else:
-            return f"Static folder {app.static_folder} does not exist. Current dir: {os.getcwd()}, Base dir: {basedir}", 404
-
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -763,6 +748,20 @@ def predict():
 @app.route('/outputs/<path:filename>')
 def serve_output(filename):
     return send_from_directory('outputs', filename)
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    elif os.path.exists(os.path.join(app.static_folder, "index.html")):
+        return send_from_directory(app.static_folder, "index.html")
+    else:
+        if os.path.exists(app.static_folder):
+            contents = os.listdir(app.static_folder)
+            return f"index.html not found in {app.static_folder}. Directory contents: {contents}", 404
+        else:
+            return f"Static folder {app.static_folder} does not exist. Current dir: {os.getcwd()}, Base dir: {basedir}", 404
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
