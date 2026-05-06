@@ -2,7 +2,7 @@ import axios from "axios";
 import { useMemo, useState } from "react";
 import "./App.css";
 
-const API_BASE = "";
+const API_BASE = import.meta.env.DEV ? "http://127.0.0.1:5000" : "";
 
 function formatMoney(value) {
   return new Intl.NumberFormat("en-US", {
