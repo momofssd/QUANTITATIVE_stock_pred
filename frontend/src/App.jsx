@@ -2,7 +2,7 @@ import axios from "axios";
 import { useMemo, useState } from "react";
 import "./App.css";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "";
 
 function formatMoney(value) {
   return new Intl.NumberFormat("en-US", {
@@ -59,23 +59,48 @@ function linePath(series, key, xFor, yFor) {
     .join(" ");
 }
 
-function LineChart({ series, lines, yDomain, markers = false, threshold = null }) {
+function LineChart({
+  series,
+  lines,
+  yDomain,
+  markers = false,
+  threshold = null,
+}) {
   const width = 820;
   const height = 360;
   const pad = { top: 26, right: 30, bottom: 44, left: 58 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const domain = yDomain || getDomain(series, lines.map((line) => line.key));
+  const domain =
+    yDomain ||
+    getDomain(
+      series,
+      lines.map((line) => line.key),
+    );
   const [minY, maxY] = domain;
-  const xFor = (index) => pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
-  const yFor = (value) => pad.top + ((maxY - value) / (maxY - minY || 1)) * plotH;
+  const xFor = (index) =>
+    pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
+  const yFor = (value) =>
+    pad.top + ((maxY - value) / (maxY - minY || 1)) * plotH;
   const firstDate = series[0]?.date ?? "";
   const lastDate = series.at(-1)?.date ?? "";
 
   return (
     <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img">
-      <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} className="axis" />
-      <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} className="axis" />
+      <line
+        x1={pad.left}
+        y1={pad.top}
+        x2={pad.left}
+        y2={height - pad.bottom}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={height - pad.bottom}
+        x2={width - pad.right}
+        y2={height - pad.bottom}
+        className="axis"
+      />
       {[0.25, 0.5, 0.75].map((tick) => (
         <line
           key={tick}
@@ -120,13 +145,28 @@ function LineChart({ series, lines, yDomain, markers = false, threshold = null }
       <text x={pad.left} y={height - 10} className="axis-label">
         {firstDate}
       </text>
-      <text x={width - pad.right} y={height - 10} textAnchor="end" className="axis-label">
+      <text
+        x={width - pad.right}
+        y={height - 10}
+        textAnchor="end"
+        className="axis-label"
+      >
         {lastDate}
       </text>
-      <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={pad.top + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         {maxY.toFixed(maxY <= 1 ? 2 : 0)}
       </text>
-      <text x={pad.left - 8} y={height - pad.bottom} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={height - pad.bottom}
+        textAnchor="end"
+        className="axis-label"
+      >
         {minY.toFixed(minY <= 1 ? 2 : 0)}
       </text>
     </svg>
@@ -150,20 +190,41 @@ function PriceIndicatorsChart({ series }) {
   const macdValues = series
     .flatMap((point) => [point.macd, point.macd_signal, point.macd_hist])
     .filter(Number.isFinite);
-  const macdMax = Math.max(...macdValues.map((value) => Math.abs(value)), 0.01) * 1.15;
+  const macdMax =
+    Math.max(...macdValues.map((value) => Math.abs(value)), 0.01) * 1.15;
   const splitIndex = series.findIndex((point) => point.phase !== "train");
-  const xFor = (index) => pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
-  const yPrice = (value) => priceTop + ((maxPrice - value) / (maxPrice - minPrice || 1)) * priceH;
+  const xFor = (index) =>
+    pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
+  const yPrice = (value) =>
+    priceTop + ((maxPrice - value) / (maxPrice - minPrice || 1)) * priceH;
   const yRsi = (value) => rsiTop + ((100 - value) / 100) * rsiH;
-  const yMacd = (value) => macdTop + ((macdMax - value) / (macdMax * 2 || 1)) * macdH;
+  const yMacd = (value) =>
+    macdTop + ((macdMax - value) / (macdMax * 2 || 1)) * macdH;
   const macdZeroY = yMacd(0);
-  const histW = Math.max(plotW / Math.max(series.length, 1) * 0.62, 1.5);
-  const formatMacdAxis = (value) => (Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(2));
+  const histW = Math.max((plotW / Math.max(series.length, 1)) * 0.62, 1.5);
+  const formatMacdAxis = (value) =>
+    Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(2);
 
   return (
-    <svg className="chart-svg price-indicators-chart" viewBox={`0 0 ${width} ${height}`} role="img">
-      <line x1={pad.left} y1={priceTop} x2={pad.left} y2={priceTop + priceH} className="axis" />
-      <line x1={pad.left} y1={priceTop + priceH} x2={width - pad.right} y2={priceTop + priceH} className="axis" />
+    <svg
+      className="chart-svg price-indicators-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+    >
+      <line
+        x1={pad.left}
+        y1={priceTop}
+        x2={pad.left}
+        y2={priceTop + priceH}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={priceTop + priceH}
+        x2={width - pad.right}
+        y2={priceTop + priceH}
+        className="axis"
+      />
       {[0.33, 0.66].map((tick) => (
         <line
           key={`price-${tick}`}
@@ -199,8 +260,20 @@ function PriceIndicatorsChart({ series }) {
         />
       ))}
 
-      <line x1={pad.left} y1={rsiTop} x2={pad.left} y2={rsiTop + rsiH} className="axis" />
-      <line x1={pad.left} y1={rsiTop + rsiH} x2={width - pad.right} y2={rsiTop + rsiH} className="axis" />
+      <line
+        x1={pad.left}
+        y1={rsiTop}
+        x2={pad.left}
+        y2={rsiTop + rsiH}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={rsiTop + rsiH}
+        x2={width - pad.right}
+        y2={rsiTop + rsiH}
+        className="axis"
+      />
       {[70, 30].map((level) => (
         <line
           key={`rsi-${level}`}
@@ -217,8 +290,20 @@ function PriceIndicatorsChart({ series }) {
         className="rsi-line"
       />
 
-      <line x1={pad.left} y1={macdTop} x2={pad.left} y2={macdTop + macdH} className="axis" />
-      <line x1={pad.left} y1={macdZeroY} x2={width - pad.right} y2={macdZeroY} className="zero-line" />
+      <line
+        x1={pad.left}
+        y1={macdTop}
+        x2={pad.left}
+        y2={macdTop + macdH}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={macdZeroY}
+        x2={width - pad.right}
+        y2={macdZeroY}
+        className="zero-line"
+      />
       {[-0.5, 0.5].map((tick) => (
         <line
           key={`macd-grid-${tick}`}
@@ -244,43 +329,106 @@ function PriceIndicatorsChart({ series }) {
           />
         );
       })}
-      <path d={linePath(series, "macd", xFor, yMacd)} fill="none" className="macd-line" />
-      <path d={linePath(series, "macd_signal", xFor, yMacd)} fill="none" className="macd-signal-line" />
+      <path
+        d={linePath(series, "macd", xFor, yMacd)}
+        fill="none"
+        className="macd-line"
+      />
+      <path
+        d={linePath(series, "macd_signal", xFor, yMacd)}
+        fill="none"
+        className="macd-signal-line"
+      />
 
-      <text x={pad.left - 8} y={priceTop + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={priceTop + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         {maxPrice.toFixed(0)}
       </text>
-      <text x={pad.left - 8} y={priceTop + priceH} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={priceTop + priceH}
+        textAnchor="end"
+        className="axis-label"
+      >
         {minPrice.toFixed(0)}
       </text>
-      <text x={pad.left - 8} y={yRsi(70) + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={yRsi(70) + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         70
       </text>
-      <text x={pad.left - 8} y={yRsi(30) + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={yRsi(30) + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         30
       </text>
-      <text x={pad.left - 8} y={macdTop + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={macdTop + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         {formatMacdAxis(macdMax)}
       </text>
-      <text x={pad.left - 8} y={macdZeroY + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={macdZeroY + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         0
       </text>
-      <text x={pad.left - 8} y={macdTop + macdH} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={macdTop + macdH}
+        textAnchor="end"
+        className="axis-label"
+      >
         -{formatMacdAxis(macdMax)}
       </text>
       <text x={pad.left} y={height - 10} className="axis-label">
         {firstDate}
       </text>
-      <text x={width - pad.right} y={height - 10} textAnchor="end" className="axis-label">
+      <text
+        x={width - pad.right}
+        y={height - 10}
+        textAnchor="end"
+        className="axis-label"
+      >
         {lastDate}
       </text>
-      <text x={width - pad.right} y={priceTop + 16} textAnchor="end" className="lane-label">
+      <text
+        x={width - pad.right}
+        y={priceTop + 16}
+        textAnchor="end"
+        className="lane-label"
+      >
         Price
       </text>
-      <text x={width - pad.right} y={rsiTop + 16} textAnchor="end" className="lane-label">
+      <text
+        x={width - pad.right}
+        y={rsiTop + 16}
+        textAnchor="end"
+        className="lane-label"
+      >
         RSI
       </text>
-      <text x={width - pad.right} y={macdTop + 16} textAnchor="end" className="lane-label">
+      <text
+        x={width - pad.right}
+        y={macdTop + 16}
+        textAnchor="end"
+        className="lane-label"
+      >
         MACD / Signal
       </text>
     </svg>
@@ -298,14 +446,18 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
   const probH = 58;
   const firstDate = series[0]?.date ?? "";
   const lastDate = series.at(-1)?.date ?? "";
-  const moves = series.map((point) => point.actual_move_pct).filter(Number.isFinite);
+  const moves = series
+    .map((point) => point.actual_move_pct)
+    .filter(Number.isFinite);
   const maxAbsMove = Math.max(...moves.map((value) => Math.abs(value)), 0.01);
   const moveMax = maxAbsMove * 1.15;
-  const xFor = (index) => pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
-  const yMove = (value) => moveTop + ((moveMax - value) / (moveMax * 2 || 1)) * moveH;
-  const yProb = (value) => probTop + ((1 - value) * probH);
+  const xFor = (index) =>
+    pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
+  const yMove = (value) =>
+    moveTop + ((moveMax - value) / (moveMax * 2 || 1)) * moveH;
+  const yProb = (value) => probTop + (1 - value) * probH;
   const zeroY = yMove(0);
-  const barW = Math.max(plotW / Math.max(series.length, 1) * 0.76, 2);
+  const barW = Math.max((plotW / Math.max(series.length, 1)) * 0.76, 2);
   const probPath = linePath(series, "probability", xFor, yProb);
   const trianglePoints = (cx, cy, size, direction) => {
     if (direction === "up") {
@@ -315,9 +467,25 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
   };
 
   return (
-    <svg className="chart-svg validation-chart" viewBox={`0 0 ${width} ${height}`} role="img">
-      <line x1={pad.left} y1={moveTop} x2={pad.left} y2={moveTop + moveH} className="axis" />
-      <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} className="zero-line" />
+    <svg
+      className="chart-svg validation-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+    >
+      <line
+        x1={pad.left}
+        y1={moveTop}
+        x2={pad.left}
+        y2={moveTop + moveH}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={zeroY}
+        x2={width - pad.right}
+        y2={zeroY}
+        className="zero-line"
+      />
       {[-0.5, 0.5].map((tick) => (
         <line
           key={tick}
@@ -329,7 +497,9 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
         />
       ))}
       {series.map((point, index) => {
-        const move = Number.isFinite(point.actual_move_pct) ? point.actual_move_pct : 0;
+        const move = Number.isFinite(point.actual_move_pct)
+          ? point.actual_move_pct
+          : 0;
         const y = yMove(Math.max(move, 0));
         const h = Math.max(Math.abs(yMove(move) - zeroY), 1);
         return (
@@ -346,20 +516,41 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
       })}
       {series.map((point, index) => {
         if (point.correct) return null;
-        const move = Number.isFinite(point.actual_move_pct) ? point.actual_move_pct : 0;
+        const move = Number.isFinite(point.actual_move_pct)
+          ? point.actual_move_pct
+          : 0;
         const actualBullish = point.actual === 1 || move >= 0;
         const y = yMove(move);
         return (
           <polygon
             key={`${point.date}-miss-${index}`}
-            points={trianglePoints(xFor(index), y, 6, actualBullish ? "up" : "down")}
-            className={actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"}
+            points={trianglePoints(
+              xFor(index),
+              y,
+              6,
+              actualBullish ? "up" : "down",
+            )}
+            className={
+              actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"
+            }
           />
         );
       })}
 
-      <line x1={pad.left} y1={probTop} x2={pad.left} y2={probTop + probH} className="axis" />
-      <line x1={pad.left} y1={probTop + probH} x2={width - pad.right} y2={probTop + probH} className="axis" />
+      <line
+        x1={pad.left}
+        y1={probTop}
+        x2={pad.left}
+        y2={probTop + probH}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={probTop + probH}
+        x2={width - pad.right}
+        y2={probTop + probH}
+        className="axis"
+      />
       <line
         x1={pad.left}
         x2={width - pad.right}
@@ -381,37 +572,84 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
         ) : (
           <polygon
             key={`${point.date}-prob-${index}`}
-            points={trianglePoints(xFor(index), yProb(point.probability), 4.8, actualBullish ? "up" : "down")}
-            className={actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"}
+            points={trianglePoints(
+              xFor(index),
+              yProb(point.probability),
+              4.8,
+              actualBullish ? "up" : "down",
+            )}
+            className={
+              actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"
+            }
           />
         );
       })}
 
-      <text x={pad.left - 8} y={moveTop + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={moveTop + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         +{formatPercent(moveMax)}
       </text>
-      <text x={pad.left - 8} y={zeroY + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={zeroY + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         0%
       </text>
-      <text x={pad.left - 8} y={moveTop + moveH} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={moveTop + moveH}
+        textAnchor="end"
+        className="axis-label"
+      >
         -{formatPercent(moveMax)}
       </text>
-      <text x={pad.left - 8} y={probTop + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={probTop + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         100%
       </text>
-      <text x={pad.left - 8} y={probTop + probH} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={probTop + probH}
+        textAnchor="end"
+        className="axis-label"
+      >
         0%
       </text>
       <text x={pad.left} y={height - 10} className="axis-label">
         {firstDate}
       </text>
-      <text x={width - pad.right} y={height - 10} textAnchor="end" className="axis-label">
+      <text
+        x={width - pad.right}
+        y={height - 10}
+        textAnchor="end"
+        className="axis-label"
+      >
         {lastDate}
       </text>
-      <text x={width - pad.right} y={moveTop + 16} textAnchor="end" className="lane-label">
+      <text
+        x={width - pad.right}
+        y={moveTop + 16}
+        textAnchor="end"
+        className="lane-label"
+      >
         Actual avg future move
       </text>
-      <text x={width - pad.right} y={probTop - 8} textAnchor="end" className="lane-label">
+      <text
+        x={width - pad.right}
+        y={probTop - 8}
+        textAnchor="end"
+        className="lane-label"
+      >
         Bullish probability
       </text>
     </svg>
@@ -429,10 +667,29 @@ function MetricsChart({ metrics }) {
 
   return (
     <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img">
-      <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} className="axis" />
-      <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} className="axis" />
+      <line
+        x1={pad.left}
+        y1={pad.top}
+        x2={pad.left}
+        y2={height - pad.bottom}
+        className="axis"
+      />
+      <line
+        x1={pad.left}
+        y1={height - pad.bottom}
+        x2={width - pad.right}
+        y2={height - pad.bottom}
+        className="axis"
+      />
       {[0.25, 0.5, 0.75].map((tick) => (
-        <line key={tick} x1={pad.left} x2={width - pad.right} y1={pad.top + plotH * tick} y2={pad.top + plotH * tick} className="grid" />
+        <line
+          key={tick}
+          x1={pad.left}
+          x2={width - pad.right}
+          y1={pad.top + plotH * tick}
+          y2={pad.top + plotH * tick}
+          className="grid"
+        />
       ))}
       {metrics.map((metric, index) => {
         const x = pad.left + index * groupW + groupW / 2;
@@ -440,18 +697,47 @@ function MetricsChart({ metrics }) {
         const aucH = metric.auc * plotH;
         return (
           <g key={metric.model}>
-            <rect x={x - barW - 2} y={height - pad.bottom - accH} width={barW} height={accH} className="bar-primary" />
-            <rect x={x + 2} y={height - pad.bottom - aucH} width={barW} height={aucH} className="bar-secondary" />
-            <text x={x} y={height - 18} textAnchor="middle" className="axis-label">
-              {metric.model.replace("RandomForest", "RF").replace("GradBoost", "GB")}
+            <rect
+              x={x - barW - 2}
+              y={height - pad.bottom - accH}
+              width={barW}
+              height={accH}
+              className="bar-primary"
+            />
+            <rect
+              x={x + 2}
+              y={height - pad.bottom - aucH}
+              width={barW}
+              height={aucH}
+              className="bar-secondary"
+            />
+            <text
+              x={x}
+              y={height - 18}
+              textAnchor="middle"
+              className="axis-label"
+            >
+              {metric.model
+                .replace("RandomForest", "RF")
+                .replace("GradBoost", "GB")}
             </text>
           </g>
         );
       })}
-      <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={pad.top + 4}
+        textAnchor="end"
+        className="axis-label"
+      >
         1.00
       </text>
-      <text x={pad.left - 8} y={height - pad.bottom} textAnchor="end" className="axis-label">
+      <text
+        x={pad.left - 8}
+        y={height - pad.bottom}
+        textAnchor="end"
+        className="axis-label"
+      >
         0.00
       </text>
     </svg>
@@ -484,7 +770,8 @@ function App() {
 
   const progress = data?.training_progress;
   const projectedChange = data
-    ? (data.conclusion.price_target - data.conclusion.last_price) / data.conclusion.last_price
+    ? (data.conclusion.price_target - data.conclusion.last_price) /
+      data.conclusion.last_price
     : 0;
   const validationStats = useMemo(() => {
     const emptyClassStats = { calls: 0, correct: 0, wrong: 0, accuracy: null };
@@ -507,8 +794,10 @@ function App() {
         accuracy: progress.validation_stats.accuracy,
         bullish: progress.validation_stats.actual_bullish,
         bearish: progress.validation_stats.actual_bearish,
-        predictedBullish: progress.validation_stats.predicted_bullish ?? emptyClassStats,
-        predictedBearish: progress.validation_stats.predicted_bearish ?? emptyClassStats,
+        predictedBullish:
+          progress.validation_stats.predicted_bullish ?? emptyClassStats,
+        predictedBearish:
+          progress.validation_stats.predicted_bearish ?? emptyClassStats,
         decisionThreshold: progress.validation_stats.decision_threshold ?? 0.5,
       };
     }
@@ -530,13 +819,17 @@ function App() {
         calls: bullishCalls.length,
         correct: bullishCorrect,
         wrong: bullishCalls.length - bullishCorrect,
-        accuracy: bullishCalls.length ? bullishCorrect / bullishCalls.length : null,
+        accuracy: bullishCalls.length
+          ? bullishCorrect / bullishCalls.length
+          : null,
       },
       predictedBearish: {
         calls: bearishCalls.length,
         correct: bearishCorrect,
         wrong: bearishCalls.length - bearishCorrect,
-        accuracy: bearishCalls.length ? bearishCorrect / bearishCalls.length : null,
+        accuracy: bearishCalls.length
+          ? bearishCorrect / bearishCalls.length
+          : null,
       },
       decisionThreshold: 0.5,
     };
@@ -558,7 +851,11 @@ function App() {
         setError(response.data.message || "Error running prediction");
       }
     } catch (err) {
-      setError(err.response?.data?.message || err.message || "Error connecting to backend");
+      setError(
+        err.response?.data?.message ||
+          err.message ||
+          "Error connecting to backend",
+      );
     } finally {
       setLoading(false);
     }
@@ -591,7 +888,10 @@ function App() {
         {loading && (
           <section className="loading-panel">
             <div className="pulse-line" />
-            <p>Fetching market history, engineering indicators, and fitting the ensemble.</p>
+            <p>
+              Fetching market history, engineering indicators, and fitting the
+              ensemble.
+            </p>
           </section>
         )}
 
@@ -604,7 +904,13 @@ function App() {
               </div>
               <div>
                 <span className="label">Signal</span>
-                <strong className={data.conclusion.trend === "BULLISH" ? "positive" : "negative"}>
+                <strong
+                  className={
+                    data.conclusion.trend === "BULLISH"
+                      ? "positive"
+                      : "negative"
+                  }
+                >
                   {data.conclusion.trend}
                 </strong>
               </div>
@@ -622,7 +928,9 @@ function App() {
               </div>
               <div>
                 <span className="label">Projected Move</span>
-                <strong className={projectedChange >= 0 ? "positive" : "negative"}>
+                <strong
+                  className={projectedChange >= 0 ? "positive" : "negative"}
+                >
                   {projectedChange >= 0 ? "+" : ""}
                   {formatPercent(projectedChange)}
                 </strong>
@@ -633,11 +941,19 @@ function App() {
               </div>
               <div>
                 <span className="label">Support</span>
-                <strong>{formatOptionalMoney(data.conclusion.support ?? data.conclusion.near_sup)}</strong>
+                <strong>
+                  {formatOptionalMoney(
+                    data.conclusion.support ?? data.conclusion.near_sup,
+                  )}
+                </strong>
               </div>
               <div>
                 <span className="label">Resistance</span>
-                <strong>{formatOptionalMoney(data.conclusion.resistance ?? data.conclusion.near_res)}</strong>
+                <strong>
+                  {formatOptionalMoney(
+                    data.conclusion.resistance ?? data.conclusion.near_res,
+                  )}
+                </strong>
               </div>
               <div>
                 <span className="label">Time Frame</span>
@@ -660,13 +976,17 @@ function App() {
               ))}
             </section>
 
-            <section className="chart-row" aria-label="Training progress charts">
+            <section
+              className="chart-row"
+              aria-label="Training progress charts"
+            >
               <article className="chart-panel wide">
                 <div className="chart-head">
                   <div>
                     <h2>Training and Validation Price Path</h2>
                     <p>
-                      {progress.summary.start_date} to {progress.summary.end_date}
+                      {progress.summary.start_date} to{" "}
+                      {progress.summary.end_date}
                     </p>
                   </div>
                   <div className="legend">
@@ -687,13 +1007,12 @@ function App() {
                   <div>
                     <h2>Validation Accuracy Trail</h2>
                     <p>
-                      {formatPercent(validationStats.accuracy)} accuracy,
-                      {" "}
-                      {validationStats.correct} correct / {validationStats.wrong} wrong,
-                      {" "}
-                      {validationStats.bullish} bullish / {validationStats.bearish} bearish actuals,
-                      {" "}
-                      threshold {formatPercent(validationStats.decisionThreshold)}
+                      {formatPercent(validationStats.accuracy)} accuracy,{" "}
+                      {validationStats.correct} correct /{" "}
+                      {validationStats.wrong} wrong, {validationStats.bullish}{" "}
+                      bullish / {validationStats.bearish} bearish actuals,{" "}
+                      threshold{" "}
+                      {formatPercent(validationStats.decisionThreshold)}
                     </p>
                   </div>
                   <div className="legend validation-legend">
@@ -701,8 +1020,12 @@ function App() {
                     <span className="threshold-key">Decision threshold</span>
                     <span className="actual-bullish-key">Actual bullish</span>
                     <span className="actual-bearish-key">Actual bearish</span>
-                    <span className="missed-bullish-key">Wrong: actual bullish</span>
-                    <span className="missed-bearish-key">Wrong: actual bearish</span>
+                    <span className="missed-bullish-key">
+                      Wrong: actual bullish
+                    </span>
+                    <span className="missed-bearish-key">
+                      Wrong: actual bearish
+                    </span>
                   </div>
                 </div>
                 <ValidationChart
@@ -712,16 +1035,26 @@ function App() {
                 <div className="validation-call-stats">
                   <div>
                     <span>Bullish predictions</span>
-                    <strong>{formatOptionalPercent(validationStats.predictedBullish.accuracy)}</strong>
+                    <strong>
+                      {formatOptionalPercent(
+                        validationStats.predictedBullish.accuracy,
+                      )}
+                    </strong>
                     <small>
-                      {validationStats.predictedBullish.correct} / {validationStats.predictedBullish.calls} correct
+                      {validationStats.predictedBullish.correct} /{" "}
+                      {validationStats.predictedBullish.calls} correct
                     </small>
                   </div>
                   <div>
                     <span>Bearish predictions</span>
-                    <strong>{formatOptionalPercent(validationStats.predictedBearish.accuracy)}</strong>
+                    <strong>
+                      {formatOptionalPercent(
+                        validationStats.predictedBearish.accuracy,
+                      )}
+                    </strong>
                     <small>
-                      {validationStats.predictedBearish.correct} / {validationStats.predictedBearish.calls} correct
+                      {validationStats.predictedBearish.correct} /{" "}
+                      {validationStats.predictedBearish.calls} correct
                     </small>
                   </div>
                 </div>
