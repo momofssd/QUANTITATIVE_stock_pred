@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -23,8 +24,6 @@ from flask_cors import CORS
 import warnings
 warnings.filterwarnings("ignore")
 
-import os
-
 basedir = os.path.abspath(os.path.dirname(__file__))
 dist_folder = os.path.join(basedir, "frontend", "dist")
 app = Flask(__name__, static_folder=dist_folder)
@@ -39,6 +38,10 @@ TRAIN_RATIO     = 0.80
 LOOKBACK        = 20
 SUPPORT_RES_WIN = 10
 Z_SCORE_WINDOWS = [20, 50, 100]
+MIN_HISTORY_ROWS = 260
+XGB_ESTIMATORS = int(os.environ.get("XGB_ESTIMATORS", "160"))
+RF_ESTIMATORS = int(os.environ.get("RF_ESTIMATORS", "160"))
+GB_ESTIMATORS = int(os.environ.get("GB_ESTIMATORS", "120"))
 
 COLORS = {
     "bg":      "#0d1117",
@@ -55,64 +58,68 @@ COLORS = {
     "cyan":    "#76e3ea",
 }
 
+def build_synthetic_history(ticker: str) -> pd.DataFrame:
+    seed = sum(ord(c) for c in ticker)
+    rng  = np.random.default_rng(seed)
+    n_days   = 5040
+    end_date = datetime.now().date()
+    bdays    = pd.bdate_range(end=end_date, periods=n_days)
+    start_price = float(rng.integers(20, 400))
+    annual_ret  = rng.uniform(0.04, 0.18)
+    annual_vol  = rng.uniform(0.18, 0.40)
+    dt       = 1 / 252
+    drift    = (annual_ret - 0.5 * annual_vol**2) * dt
+    vol_step = annual_vol * np.sqrt(dt)
+    prices      = [start_price]
+    regime_dur  = rng.integers(60, 240, size=60)
+    regime_type = rng.choice(["bull", "bear", "sideways"], size=60, p=[0.50, 0.25, 0.25])
+    regime_mod  = {"bull": 1.4, "bear": -0.6, "sideways": 0.1}
+
+    reg_idx, days_in_reg = 0, 0
+    for _ in range(n_days - 1):
+        if days_in_reg >= regime_dur[reg_idx % len(regime_dur)]:
+            reg_idx += 1
+            days_in_reg = 0
+        mod       = regime_mod[regime_type[reg_idx % len(regime_type)]]
+        eff_drift = drift * mod
+        shock     = rng.standard_normal() * vol_step
+        if rng.random() < 0.003:
+            shock += rng.choice([-1, 1]) * rng.uniform(0.03, 0.08)
+        prices.append(max(prices[-1] * np.exp(eff_drift + shock), 1.0))
+        days_in_reg += 1
+
+    close_arr  = np.array(prices)
+    daily_range = rng.uniform(0.005, 0.025, size=n_days)
+    high_arr   = close_arr * (1 + daily_range * rng.uniform(0.3, 1.0, n_days))
+    low_arr    = close_arr * (1 - daily_range * rng.uniform(0.3, 1.0, n_days))
+    open_arr   = low_arr + rng.random(n_days) * (high_arr - low_arr)
+    base_vol   = float(rng.integers(5_000_000, 80_000_000))
+    volume_arr = (base_vol * rng.lognormal(0, 0.5, n_days)).astype(int)
+    return pd.DataFrame({
+        "Open":   open_arr,
+        "High":   high_arr,
+        "Low":    low_arr,
+        "Close":  close_arr,
+        "Volume": volume_arr,
+    }, index=bdays)
+
 def fetch_data(ticker: str) -> pd.DataFrame:
     df = pd.DataFrame()
     live_success = False
     try:
         t = yf.Ticker(ticker)
         df = t.history(period="max", auto_adjust=True, repair=True, keepna=False)
-        if not df.empty:
+        if not df.empty and len(df) >= MIN_HISTORY_ROWS:
             df.index = pd.to_datetime(df.index).tz_localize(None)
             df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
             df.dropna(inplace=True)
-            live_success = True
-    except Exception:
-        pass
+            live_success = len(df) >= MIN_HISTORY_ROWS
+    except Exception as exc:
+        app.logger.warning("Live market data fetch failed for %s: %s", ticker, exc)
 
     if not live_success:
-        seed = sum(ord(c) for c in ticker)
-        rng  = np.random.default_rng(seed)
-        n_days   = 5040
-        end_date = datetime(2025, 5, 2)
-        bdays    = pd.bdate_range(end=end_date, periods=n_days)
-        start_price = float(rng.integers(20, 400))
-        annual_ret  = rng.uniform(0.04, 0.18)
-        annual_vol  = rng.uniform(0.18, 0.40)
-        dt       = 1 / 252
-        drift    = (annual_ret - 0.5 * annual_vol**2) * dt
-        vol_step = annual_vol * np.sqrt(dt)
-        prices      = [start_price]
-        regime_dur  = rng.integers(60, 240, size=60)
-        regime_type = rng.choice(["bull", "bear", "sideways"], size=60, p=[0.50, 0.25, 0.25])
-        regime_mod  = {"bull": 1.4, "bear": -0.6, "sideways": 0.1}
-
-        reg_idx, days_in_reg = 0, 0
-        for _ in range(n_days - 1):
-            if days_in_reg >= regime_dur[reg_idx % len(regime_dur)]:
-                reg_idx += 1
-                days_in_reg = 0
-            mod       = regime_mod[regime_type[reg_idx % len(regime_type)]]
-            eff_drift = drift * mod
-            shock     = rng.standard_normal() * vol_step
-            if rng.random() < 0.003:
-                shock += rng.choice([-1, 1]) * rng.uniform(0.03, 0.08)
-            prices.append(max(prices[-1] * np.exp(eff_drift + shock), 1.0))
-            days_in_reg += 1
-
-        close_arr  = np.array(prices)
-        daily_range = rng.uniform(0.005, 0.025, size=n_days)
-        high_arr   = close_arr * (1 + daily_range * rng.uniform(0.3, 1.0, n_days))
-        low_arr    = close_arr * (1 - daily_range * rng.uniform(0.3, 1.0, n_days))
-        open_arr   = low_arr + rng.random(n_days) * (high_arr - low_arr)
-        base_vol   = float(rng.integers(5_000_000, 80_000_000))
-        volume_arr = (base_vol * rng.lognormal(0, 0.5, n_days)).astype(int)
-        df = pd.DataFrame({
-            "Open":   open_arr,
-            "High":   high_arr,
-            "Low":    low_arr,
-            "Close":  close_arr,
-            "Volume": volume_arr,
-        }, index=bdays)
+        app.logger.warning("Using synthetic fallback data for %s; live history rows=%s", ticker, len(df))
+        df = build_synthetic_history(ticker)
     return df
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,10 +208,19 @@ def train_and_validate(df: pd.DataFrame):
     y = train_df["Target"].astype(int).values
     dates = train_df.index
 
+    if len(X) < 100:
+        raise ValueError("Not enough usable market history after feature engineering. Try a ticker with more historical data.")
+    if len(np.unique(y)) < 2:
+        raise ValueError("Training data only contains one target class. Try a ticker with more varied historical moves.")
+
     split = int(len(X) * TRAIN_RATIO)
+    split = min(max(split, 50), len(X) - 20)
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
     dates_val       = dates[split:]
+
+    if len(np.unique(y_train)) < 2:
+        raise ValueError("Training split only contains one target class. Try a ticker with more varied historical moves.")
 
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
@@ -212,15 +228,15 @@ def train_and_validate(df: pd.DataFrame):
 
     models = {
         "XGBoost": xgb.XGBClassifier(
-            n_estimators=400, max_depth=5, learning_rate=0.05,
+            n_estimators=XGB_ESTIMATORS, max_depth=5, learning_rate=0.05,
             subsample=0.8, colsample_bytree=0.8,
             use_label_encoder=False, eval_metric="logloss",
             random_state=42, verbosity=0),
         "RandomForest": RandomForestClassifier(
-            n_estimators=300, max_depth=8, min_samples_leaf=5,
+            n_estimators=RF_ESTIMATORS, max_depth=8, min_samples_leaf=5,
             random_state=42, n_jobs=1),
         "GradBoost": GradientBoostingClassifier(
-            n_estimators=200, max_depth=4, learning_rate=0.08,
+            n_estimators=GB_ESTIMATORS, max_depth=4, learning_rate=0.08,
             subsample=0.8, random_state=42),
     }
 
@@ -247,6 +263,11 @@ def train_and_validate(df: pd.DataFrame):
         threshold = float(np.clip(threshold, 0.05, 0.95))
         return threshold, balanced_accuracy_for_threshold(y_true, probabilities, threshold)
 
+    def safe_auc(y_true, probabilities):
+        if len(np.unique(y_true)) < 2:
+            return None
+        return roc_auc_score(y_true, probabilities)
+
     for name, mdl in models.items():
         mdl.fit(X_train_s, y_train)
         p = mdl.predict(X_val_s)
@@ -254,14 +275,14 @@ def train_and_validate(df: pd.DataFrame):
         preds_val[name]  = p
         probas_val[name] = pr
         acc = accuracy_score(y_val, p)
-        auc = roc_auc_score(y_val, pr)
+        auc = safe_auc(y_val, pr)
         metrics[name] = {"acc": acc, "auc": auc}
 
     ensemble_proba = np.mean([probas_val[n] for n in models], axis=0)
     decision_threshold, balanced_acc = tune_decision_threshold(y_val, ensemble_proba)
     ensemble_pred  = (ensemble_proba >= decision_threshold).astype(int)
     ens_acc = accuracy_score(y_val, ensemble_pred)
-    ens_auc = roc_auc_score(y_val, ensemble_proba)
+    ens_auc = safe_auc(y_val, ensemble_proba)
     metrics["Ensemble"] = {"acc": ens_acc, "auc": ens_auc, "balanced_acc": balanced_acc}
 
     for name, mdl in models.items():
@@ -733,8 +754,12 @@ def run_prediction(ticker: str):
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
-    data = request.json
-    ticker = data.get('ticker', 'SPY')
+    data = request.get_json(silent=True) or {}
+    ticker = str(data.get('ticker', 'SPY')).strip().upper()
+    if not ticker:
+        return jsonify({"status": "error", "message": "Ticker is required."}), 400
+    if not re.fullmatch(r"[A-Z0-9.^=-]{1,15}", ticker):
+        return jsonify({"status": "error", "message": "Ticker contains unsupported characters."}), 400
     try:
         conclusion, training_progress = run_prediction(ticker)
         return jsonify({
@@ -742,8 +767,21 @@ def predict():
             "conclusion": conclusion,
             "training_progress": training_progress
         })
+    except ValueError as e:
+        app.logger.warning("Prediction rejected for %s: %s", ticker, e)
+        return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        import traceback
+        tb_str = traceback.format_exc()
+        print(f"Exception for ticker {ticker}:\n{tb_str}", file=sys.stderr)
+        app.logger.error("Prediction failed for %s: %s", ticker, str(e))
+        return jsonify({
+            "status": "error",
+            "message": "An unexpected operational error occurred on the server.",
+            "error_type": type(e).__name__,
+            "detail": str(e),
+            "traceback": tb_str.splitlines()
+        }), 500
 
 @app.route('/outputs/<path:filename>')
 def serve_output(filename):
