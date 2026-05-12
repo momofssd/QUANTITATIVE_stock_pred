@@ -322,6 +322,35 @@ main {
   background: #004f2d;
 }
 
+.validation-legend .actual-price-key::before {
+  height: 4px;
+  background: #004f2d;
+}
+
+.validation-legend .predicted-price-key::before {
+  height: 4px;
+  background: #c47f00;
+}
+
+.validation-legend .close-price-key::before {
+  height: 3px;
+  background: #7b8480;
+}
+
+.validation-legend .pred-bullish-key::before {
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: #007a33;
+}
+
+.validation-legend .pred-bearish-key::before {
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: #b00020;
+}
+
 .validation-legend .threshold-key::before {
   background: repeating-linear-gradient(
     90deg,
@@ -337,10 +366,12 @@ main {
 }
 
 .validation-legend .wrong-key::before {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid #b00020;
   border-radius: 999px;
-  background: #b00020;
+  background: transparent;
 }
 
 .validation-legend .missed-bullish-key::before {
@@ -385,6 +416,11 @@ main {
 .grid {
   stroke: #ccd4cc;
   stroke-width: 1.1;
+}
+
+.date-grid {
+  stroke: #dfe4de;
+  stroke-width: 1;
 }
 
 .threshold {
@@ -441,9 +477,32 @@ main {
 
 .probability-line {
   stroke: #004f2d;
-  stroke-width: 2.6;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.actual-price-line {
+  stroke: #004f2d;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.predicted-price-line {
+  stroke: #c47f00;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.close-price-line {
+  stroke: #7b8480;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.72;
 }
 
 .axis-label {
@@ -464,6 +523,98 @@ main {
 
 .actual-bearish-bar {
   fill: #b00020;
+}
+
+.actual-bullish-dot {
+  fill: #ffffff;
+  stroke: #007a33;
+  stroke-width: 1.8;
+}
+
+.actual-bearish-dot {
+  fill: #ffffff;
+  stroke: #b00020;
+  stroke-width: 1.8;
+}
+
+.predicted-price-dot {
+  fill: #c47f00;
+  stroke: #ffffff;
+  stroke-width: 1.2;
+}
+
+.actual-end-dot {
+  fill: #ffffff;
+  stroke: #004f2d;
+  stroke-width: 2;
+}
+
+.predicted-end-dot {
+  fill: #c47f00;
+  stroke: #ffffff;
+  stroke-width: 1.4;
+}
+
+.validation-hover-target {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.direction-band-line {
+  stroke: #d8dfd7;
+  stroke-width: 1;
+}
+
+.prediction-bullish-rug {
+  stroke: #007a33;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  opacity: 0.78;
+}
+
+.prediction-bearish-rug {
+  stroke: #b00020;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  opacity: 0.78;
+}
+
+.wrong-rug {
+  stroke: #b00020;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.72;
+}
+
+.wrong-ring {
+  fill: transparent;
+  stroke: #b00020;
+  stroke-width: 1.7;
+}
+
+.wrong-error-line {
+  stroke: #b00020;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.82;
+}
+
+.wrong-x {
+  stroke: #b00020;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.actual-price-end-label {
+  fill: #004f2d;
+}
+
+.predicted-price-end-label {
+  fill: #a35c00;
+}
+
+.prediction-direction-label {
+  fill: #647069;
 }
 
 .hit-dot {

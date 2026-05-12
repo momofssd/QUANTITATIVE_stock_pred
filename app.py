@@ -357,18 +357,56 @@ def find_support_resistance(price_data, window: int = SUPPORT_RES_WIN, tolerance
     resistances = [level["level"] for level in resistance_details]
     return supports, resistances, support_details, resistance_details
 
+def _finite_float(value, fallback=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if np.isfinite(number) else fallback
+
+def _directional_confidence(probability: float, decision_threshold: float) -> float:
+    probability = _finite_float(probability, 0.5)
+    decision_threshold = float(np.clip(_finite_float(decision_threshold, 0.5), 1e-9, 1 - 1e-9))
+    trend = "BULLISH" if probability >= decision_threshold else "BEARISH"
+    if trend == "BULLISH":
+        confidence = 0.5 + 0.5 * ((probability - decision_threshold) / max(1 - decision_threshold, 1e-9))
+    else:
+        confidence = 0.5 + 0.5 * ((decision_threshold - probability) / max(decision_threshold, 1e-9))
+    return float(np.clip(confidence, 0.5, 1.0))
+
+def estimate_price_projection(last_price, probability, decision_threshold, hist_vol, adx, close_z_20):
+    last_price = _finite_float(last_price)
+    probability = _finite_float(probability, 0.5)
+    trend = "BULLISH" if probability >= decision_threshold else "BEARISH"
+    confidence = _directional_confidence(probability, decision_threshold)
+
+    adx_factor     = min(max(_finite_float(adx), 0.0) / 25, 2.0)
+    base_move_pct  = max(_finite_float(hist_vol), 0.0) / np.sqrt(252 / PREDICTION_DAYS)
+    close_z_20     = _finite_float(close_z_20)
+    z_alignment    = (-close_z_20 / 2) if trend == "BULLISH" else (close_z_20 / 2)
+    z_factor       = float(np.clip(1 + 0.15 * z_alignment, 0.85, 1.15))
+    target_move    = last_price * base_move_pct * adx_factor * confidence * z_factor
+
+    if trend == "BULLISH":
+        price_target = last_price + target_move
+    else:
+        price_target = last_price - target_move
+
+    return {
+        "trend": trend,
+        "confidence": float(confidence),
+        "price_target": float(price_target),
+        "target_move": float(target_move),
+        "move_pct": float((price_target - last_price) / last_price) if last_price else None,
+        "z_factor": float(z_factor),
+    }
+
 def make_prediction(ticker: str, models, scaler, feature_cols, df: pd.DataFrame, ensemble_proba, y_val, decision_threshold: float):
     last_row    = df[feature_cols].iloc[-1:].values
     last_scaled = scaler.transform(last_row)
 
     model_probas = [m.predict_proba(last_scaled)[0, 1] for m in models.values()]
     final_prob   = float(np.mean(model_probas))
-    trend        = "BULLISH" if final_prob >= decision_threshold else "BEARISH"
-    if trend == "BULLISH":
-        confidence = 0.5 + 0.5 * ((final_prob - decision_threshold) / max(1 - decision_threshold, 1e-9))
-    else:
-        confidence = 0.5 + 0.5 * ((decision_threshold - final_prob) / max(decision_threshold, 1e-9))
-    confidence = float(np.clip(confidence, 0.5, 1.0))
 
     last_price   = float(df["Close"].iloc[-1])
     atr          = float(df["ATR"].iloc[-1])
@@ -379,23 +417,22 @@ def make_prediction(ticker: str, models, scaler, feature_cols, df: pd.DataFrame,
     return_z_20  = float(df["Return_Z_20"].iloc[-1])
     volume_z_20  = float(df["Volume_Z_20"].iloc[-1])
 
-    adx_factor     = min(adx / 25, 2.0)
-    conf_factor    = confidence
-    base_move_pct  = hist_vol / np.sqrt(252 / PREDICTION_DAYS)
-    z_alignment    = (-close_z_20 / 2) if trend == "BULLISH" else (close_z_20 / 2)
-    z_factor       = float(np.clip(1 + 0.15 * z_alignment, 0.85, 1.15))
-    target_move    = last_price * base_move_pct * adx_factor * conf_factor * z_factor
+    projection = estimate_price_projection(
+        last_price, final_prob, decision_threshold, hist_vol, adx, close_z_20
+    )
+    trend = projection["trend"]
+    confidence = projection["confidence"]
+    price_target = projection["price_target"]
+    z_factor = projection["z_factor"]
 
     if trend == "BULLISH":
-        price_target = last_price + target_move
-        stop_loss    = last_price - atr * 2
+        stop_loss = last_price - atr * 2
     else:
-        price_target = last_price - target_move
-        stop_loss    = last_price + atr * 2
+        stop_loss = last_price + atr * 2
 
     base_dur   = PREDICTION_DAYS
     dur_factor = min(adx / 20, 2.5)
-    est_days   = max(5, int(base_dur * dur_factor * conf_factor * z_factor))
+    est_days   = max(5, int(base_dur * dur_factor * confidence * z_factor))
     est_end    = df.index[-1] + BDay(est_days)
 
     if close_z_20 >= 2:
@@ -488,21 +525,38 @@ def build_training_progress(df: pd.DataFrame, split: int, dates_val, ensemble_pr
         })
 
     validation_records = []
-    val_rows = df.loc[dates_val, ["Close", "Future_avg_close"]]
+    val_rows = df.loc[dates_val, ["Close", "Future_avg_close", "Volatility_20d", "ADX", "Close_Z_20"]]
     for date, row, pred, prob, actual in zip(dates_val, val_rows.itertuples(), ensemble_pred, ensemble_proba, y_val):
         close = float(row.Close)
         future_avg_close = float(row.Future_avg_close)
+        actual_direction = 1 if future_avg_close > close else 0
+        prediction_direction = int(pred)
+        is_correct = prediction_direction == actual_direction
+        projection = estimate_price_projection(
+            close,
+            prob,
+            decision_threshold,
+            row.Volatility_20d,
+            row.ADX,
+            row.Close_Z_20,
+        )
         validation_records.append({
             "date": date.date().isoformat(),
             "close": _safe_float(close),
             "future_avg_close": _safe_float(future_avg_close),
+            "actual_price": _safe_float(future_avg_close),
+            "predicted_price": _safe_float(projection["price_target"]),
             "actual_move_pct": _safe_float((future_avg_close - close) / close),
+            "predicted_move_pct": _safe_float(projection["move_pct"]),
+            "prediction_error": _safe_float(projection["price_target"] - future_avg_close),
+            "prediction_error_pct": _safe_float((projection["price_target"] - future_avg_close) / close),
             "probability": _safe_float(prob),
-            "correct": bool(pred == actual),
-            "prediction": int(pred),
-            "actual": int(actual),
-            "actual_trend": "BULLISH" if int(actual) == 1 else "BEARISH",
-            "prediction_trend": "BULLISH" if int(pred) == 1 else "BEARISH",
+            "correct": bool(is_correct),
+            "prediction": prediction_direction,
+            "actual": actual_direction,
+            "model_target": int(actual),
+            "actual_trend": "BULLISH" if actual_direction == 1 else "BEARISH",
+            "prediction_trend": "BULLISH" if prediction_direction == 1 else "BEARISH",
         })
 
     def prediction_class_stats(prediction_value: int):

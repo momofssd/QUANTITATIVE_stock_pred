@@ -32,6 +32,40 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function formatTickDate(value) {
+  if (!value) return "";
+  const parts = String(value).split("-").map(Number);
+  if (parts.length >= 3 && parts.every(Number.isFinite)) {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+    }).format(new Date(parts[0], parts[1] - 1, parts[2]));
+  }
+  return value;
+}
+
+function formatAxisMoney(value) {
+  if (!Number.isFinite(value)) return "--";
+  const absValue = Math.abs(value);
+  const digits = absValue >= 100 ? 0 : 2;
+  return `$${value.toLocaleString("en-US", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  })}`;
+}
+
+function getDateTicks(series, maxTicks = 6) {
+  if (!series.length) return [];
+  const tickCount = Math.min(maxTicks, series.length);
+  const indexes = new Set();
+  for (let i = 0; i < tickCount; i += 1) {
+    const index =
+      tickCount === 1 ? 0 : Math.round((i * (series.length - 1)) / (tickCount - 1));
+    indexes.add(index);
+  }
+  return [...indexes].sort((a, b) => a - b);
+}
+
 function getDomain(series, keys, fallback = [0, 1]) {
   const values = series
     .flatMap((point) => keys.map((key) => point[key]))
@@ -59,131 +93,17 @@ function linePath(series, key, xFor, yFor) {
     .join(" ");
 }
 
-function LineChart({
-  series,
-  lines,
-  yDomain,
-  markers = false,
-  threshold = null,
-}) {
-  const width = 820;
-  const height = 360;
-  const pad = { top: 26, right: 30, bottom: 44, left: 58 };
-  const plotW = width - pad.left - pad.right;
-  const plotH = height - pad.top - pad.bottom;
-  const domain =
-    yDomain ||
-    getDomain(
-      series,
-      lines.map((line) => line.key),
-    );
-  const [minY, maxY] = domain;
-  const xFor = (index) =>
-    pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
-  const yFor = (value) =>
-    pad.top + ((maxY - value) / (maxY - minY || 1)) * plotH;
-  const firstDate = series[0]?.date ?? "";
-  const lastDate = series.at(-1)?.date ?? "";
-
-  return (
-    <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img">
-      <line
-        x1={pad.left}
-        y1={pad.top}
-        x2={pad.left}
-        y2={height - pad.bottom}
-        className="axis"
-      />
-      <line
-        x1={pad.left}
-        y1={height - pad.bottom}
-        x2={width - pad.right}
-        y2={height - pad.bottom}
-        className="axis"
-      />
-      {[0.25, 0.5, 0.75].map((tick) => (
-        <line
-          key={tick}
-          x1={pad.left}
-          x2={width - pad.right}
-          y1={pad.top + plotH * tick}
-          y2={pad.top + plotH * tick}
-          className="grid"
-        />
-      ))}
-      {markers &&
-        series.map((point, index) => (
-          <rect
-            key={`${point.date}-${index}`}
-            x={xFor(index) - plotW / Math.max(series.length - 1, 1) / 2}
-            y={pad.top}
-            width={Math.max(plotW / Math.max(series.length - 1, 1), 2)}
-            height={plotH}
-            className={point.correct ? "correct-band" : "wrong-band"}
-          />
-        ))}
-      {threshold !== null && (
-        <line
-          x1={pad.left}
-          x2={width - pad.right}
-          y1={yFor(threshold)}
-          y2={yFor(threshold)}
-          className="threshold"
-        />
-      )}
-      {lines.map((line) => (
-        <path
-          key={line.key}
-          d={linePath(series, line.key, xFor, yFor)}
-          fill="none"
-          stroke={line.color}
-          strokeWidth={line.width ?? 2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ))}
-      <text x={pad.left} y={height - 10} className="axis-label">
-        {firstDate}
-      </text>
-      <text
-        x={width - pad.right}
-        y={height - 10}
-        textAnchor="end"
-        className="axis-label"
-      >
-        {lastDate}
-      </text>
-      <text
-        x={pad.left - 8}
-        y={pad.top + 4}
-        textAnchor="end"
-        className="axis-label"
-      >
-        {maxY.toFixed(maxY <= 1 ? 2 : 0)}
-      </text>
-      <text
-        x={pad.left - 8}
-        y={height - pad.bottom}
-        textAnchor="end"
-        className="axis-label"
-      >
-        {minY.toFixed(minY <= 1 ? 2 : 0)}
-      </text>
-    </svg>
-  );
-}
-
 function PriceIndicatorsChart({ series }) {
-  const width = 820;
-  const height = 620;
-  const pad = { top: 26, right: 34, bottom: 42, left: 62 };
+  const width = 1280;
+  const height = 430;
+  const pad = { top: 24, right: 38, bottom: 38, left: 62 };
   const plotW = width - pad.left - pad.right;
   const priceTop = pad.top;
-  const priceH = 235;
-  const rsiTop = priceTop + priceH + 36;
-  const rsiH = 88;
-  const macdTop = rsiTop + rsiH + 36;
-  const macdH = 150;
+  const priceH = 165;
+  const rsiTop = priceTop + priceH + 30;
+  const rsiH = 58;
+  const macdTop = rsiTop + rsiH + 30;
+  const macdH = 88;
   const firstDate = series[0]?.date ?? "";
   const lastDate = series.at(-1)?.date ?? "";
   const [minPrice, maxPrice] = getDomain(series, ["close", "sma50", "sma200"]);
@@ -436,35 +356,64 @@ function PriceIndicatorsChart({ series }) {
 }
 
 function ValidationChart({ series, decisionThreshold = 0.5 }) {
-  const width = 820;
-  const height = 360;
-  const pad = { top: 28, right: 34, bottom: 42, left: 62 };
+  const width = 1280;
+  const height = 365;
+  const pad = { top: 24, right: 86, bottom: 52, left: 70 };
+  const preparedSeries = series.map((point) => ({
+    ...point,
+    actual_price: Number.isFinite(point.actual_price)
+      ? point.actual_price
+      : point.future_avg_close,
+    predicted_price: Number.isFinite(point.predicted_price)
+      ? point.predicted_price
+      : point.close,
+  }));
   const plotW = width - pad.left - pad.right;
-  const moveTop = pad.top;
-  const moveH = 198;
-  const probTop = moveTop + moveH + 42;
-  const probH = 58;
-  const firstDate = series[0]?.date ?? "";
-  const lastDate = series.at(-1)?.date ?? "";
-  const moves = series
-    .map((point) => point.actual_move_pct)
+  const priceTop = pad.top;
+  const priceH = 180;
+  const directionTop = priceTop + priceH + 12;
+  const directionH = 24;
+  const directionMid = directionTop + directionH / 2;
+  const probTop = directionTop + directionH + 34;
+  const probH = 46;
+  const priceValues = preparedSeries
+    .flatMap((point) => [point.actual_price, point.predicted_price, point.close])
     .filter(Number.isFinite);
-  const maxAbsMove = Math.max(...moves.map((value) => Math.abs(value)), 0.01);
-  const moveMax = maxAbsMove * 1.15;
+  const rawMinPrice = priceValues.length ? Math.min(...priceValues) : 0;
+  const rawMaxPrice = priceValues.length ? Math.max(...priceValues) : 1;
+  const priceRange = rawMaxPrice - rawMinPrice || rawMaxPrice || 1;
+  const minPrice = Math.max(0, rawMinPrice - priceRange * 0.04);
+  const maxPrice = rawMaxPrice + priceRange * 0.06;
+  const midPrice = (minPrice + maxPrice) / 2;
+  const dateTicks = getDateTicks(preparedSeries, 6);
+  const lastPoint = preparedSeries.at(-1);
   const xFor = (index) =>
-    pad.left + (series.length <= 1 ? 0 : (index / (series.length - 1)) * plotW);
-  const yMove = (value) =>
-    moveTop + ((moveMax - value) / (moveMax * 2 || 1)) * moveH;
+    pad.left +
+    (preparedSeries.length <= 1
+      ? 0
+      : (index / (preparedSeries.length - 1)) * plotW);
+  const yPrice = (value) =>
+    priceTop + ((maxPrice - value) / (maxPrice - minPrice || 1)) * priceH;
   const yProb = (value) => probTop + (1 - value) * probH;
-  const zeroY = yMove(0);
-  const barW = Math.max((plotW / Math.max(series.length, 1)) * 0.76, 2);
-  const probPath = linePath(series, "probability", xFor, yProb);
-  const trianglePoints = (cx, cy, size, direction) => {
-    if (direction === "up") {
-      return `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`;
-    }
-    return `${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`;
-  };
+  const probPath = linePath(preparedSeries, "probability", xFor, yProb);
+  const actualPath = linePath(preparedSeries, "actual_price", xFor, yPrice);
+  const predictedPath = linePath(
+    preparedSeries,
+    "predicted_price",
+    xFor,
+    yPrice,
+  );
+  const closePath = linePath(preparedSeries, "close", xFor, yPrice);
+  const lastActualY = lastPoint ? yPrice(lastPoint.actual_price) : 0;
+  const lastPredictedY = lastPoint ? yPrice(lastPoint.predicted_price) : 0;
+  const actualLabelY =
+    lastPoint && Math.abs(lastActualY - lastPredictedY) < 20
+      ? lastActualY - 10
+      : lastActualY + 4;
+  const predictedLabelY =
+    lastPoint && Math.abs(lastActualY - lastPredictedY) < 20
+      ? lastPredictedY + 18
+      : lastPredictedY + 4;
 
   return (
     <svg
@@ -474,68 +423,114 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
     >
       <line
         x1={pad.left}
-        y1={moveTop}
+        y1={priceTop}
         x2={pad.left}
-        y2={moveTop + moveH}
+        y2={priceTop + priceH}
         className="axis"
       />
       <line
         x1={pad.left}
-        y1={zeroY}
+        y1={priceTop + priceH}
         x2={width - pad.right}
-        y2={zeroY}
-        className="zero-line"
+        y2={priceTop + priceH}
+        className="axis"
       />
-      {[-0.5, 0.5].map((tick) => (
+      {[maxPrice, midPrice, minPrice].map((tick) => (
         <line
           key={tick}
           x1={pad.left}
           x2={width - pad.right}
-          y1={yMove(moveMax * tick)}
-          y2={yMove(moveMax * tick)}
+          y1={yPrice(tick)}
+          y2={yPrice(tick)}
           className="grid"
         />
       ))}
-      {series.map((point, index) => {
-        const move = Number.isFinite(point.actual_move_pct)
-          ? point.actual_move_pct
-          : 0;
-        const y = yMove(Math.max(move, 0));
-        const h = Math.max(Math.abs(yMove(move) - zeroY), 1);
+      {dateTicks.map((index) => (
+        <line
+          key={`${preparedSeries[index]?.date}-date-grid`}
+          x1={xFor(index)}
+          x2={xFor(index)}
+          y1={priceTop}
+          y2={probTop + probH}
+          className="date-grid"
+        />
+      ))}
+      <path d={closePath} fill="none" className="close-price-line" />
+      <path d={actualPath} fill="none" className="actual-price-line" />
+      <path d={predictedPath} fill="none" className="predicted-price-line" />
+      <line
+        x1={pad.left}
+        x2={width - pad.right}
+        y1={directionTop}
+        y2={directionTop}
+        className="direction-band-line"
+      />
+      <line
+        x1={pad.left}
+        x2={width - pad.right}
+        y1={directionTop + directionH}
+        y2={directionTop + directionH}
+        className="direction-band-line"
+      />
+      {preparedSeries.map((point, index) => {
+        const actualPrice = point.actual_price;
+        const predictedPrice = point.predicted_price;
+        if (!Number.isFinite(actualPrice) || !Number.isFinite(predictedPrice)) {
+          return null;
+        }
+        const x = xFor(index);
+        const actualY = yPrice(actualPrice);
+        const tooltip = [
+          formatTickDate(point.date),
+          `Predicted price: ${formatMoney(predictedPrice)}`,
+          `Actual price: ${formatMoney(actualPrice)}`,
+          `Current close: ${formatMoney(point.close)}`,
+          `Prediction: ${point.prediction_trend}`,
+          `Actual: ${point.actual_trend}`,
+          `Bullish probability: ${formatPercent(point.probability)}`,
+        ].join("\n");
         return (
-          <rect
-            key={`${point.date}-move-${index}`}
-            x={xFor(index) - barW / 2}
-            y={y}
-            width={barW}
-            height={h}
-            className={move >= 0 ? "actual-bullish-bar" : "actual-bearish-bar"}
-            opacity={point.correct ? 0.78 : 0.35}
-          />
-        );
-      })}
-      {series.map((point, index) => {
-        if (point.correct) return null;
-        const move = Number.isFinite(point.actual_move_pct)
-          ? point.actual_move_pct
-          : 0;
-        const actualBullish = point.actual === 1 || move >= 0;
-        const y = yMove(move);
-        return (
-          <polygon
-            key={`${point.date}-miss-${index}`}
-            points={trianglePoints(
-              xFor(index),
-              y,
-              6,
-              actualBullish ? "up" : "down",
+          <g key={`${point.date}-price-${index}`}>
+            <title>{tooltip}</title>
+            <line
+              x1={x}
+              x2={x}
+              y1={directionTop + 4}
+              y2={directionTop + directionH - 4}
+              className={
+                point.prediction === 1
+                  ? "prediction-bullish-rug"
+                  : "prediction-bearish-rug"
+              }
+            />
+            {!point.correct && (
+              <circle cx={x} cy={directionMid} r="5.4" className="wrong-ring" />
             )}
-            className={
-              actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"
-            }
-          />
+            <circle
+              cx={x}
+              cy={actualY}
+              r="6"
+              className="validation-hover-target"
+            />
+          </g>
         );
       })}
+      {lastPoint && (
+        <>
+          <circle
+            cx={xFor(preparedSeries.length - 1)}
+            cy={lastActualY}
+            r="3.8"
+            className="actual-end-dot"
+          />
+          <circle
+            cx={xFor(preparedSeries.length - 1)}
+            cy={lastPredictedY}
+            r="3.4"
+            className="predicted-end-dot"
+          />
+        </>
+      )}
 
       <line
         x1={pad.left}
@@ -559,56 +554,18 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
         className="threshold"
       />
       <path d={probPath} fill="none" className="probability-line" />
-      {series.map((point, index) => {
-        const actualBullish = point.actual === 1;
-        return point.correct ? (
-          <circle
-            key={`${point.date}-prob-${index}`}
-            cx={xFor(index)}
-            cy={yProb(point.probability)}
-            r="2.1"
-            className="hit-dot"
-          />
-        ) : (
-          <polygon
-            key={`${point.date}-prob-${index}`}
-            points={trianglePoints(
-              xFor(index),
-              yProb(point.probability),
-              4.8,
-              actualBullish ? "up" : "down",
-            )}
-            className={
-              actualBullish ? "miss-actual-bullish" : "miss-actual-bearish"
-            }
-          />
-        );
-      })}
 
-      <text
-        x={pad.left - 8}
-        y={moveTop + 4}
-        textAnchor="end"
-        className="axis-label"
-      >
-        +{formatPercent(moveMax)}
-      </text>
-      <text
-        x={pad.left - 8}
-        y={zeroY + 4}
-        textAnchor="end"
-        className="axis-label"
-      >
-        0%
-      </text>
-      <text
-        x={pad.left - 8}
-        y={moveTop + moveH}
-        textAnchor="end"
-        className="axis-label"
-      >
-        -{formatPercent(moveMax)}
-      </text>
+      {[maxPrice, midPrice, minPrice].map((tick) => (
+        <text
+          key={`${tick}-price-label`}
+          x={pad.left - 8}
+          y={yPrice(tick) + 4}
+          textAnchor="end"
+          className="axis-label"
+        >
+          {formatAxisMoney(tick)}
+        </text>
+      ))}
       <text
         x={pad.left - 8}
         y={probTop + 4}
@@ -625,33 +582,72 @@ function ValidationChart({ series, decisionThreshold = 0.5 }) {
       >
         0%
       </text>
-      <text x={pad.left} y={height - 10} className="axis-label">
-        {firstDate}
-      </text>
+      {dateTicks.map((index) => (
+        <g key={`${preparedSeries[index]?.date}-date-tick`}>
+          <line
+            x1={xFor(index)}
+            x2={xFor(index)}
+            y1={probTop + probH}
+            y2={probTop + probH + 5}
+            className="axis"
+          />
+          <text
+            x={xFor(index)}
+            y={height - 18}
+            textAnchor="middle"
+            className="axis-label"
+          >
+            {formatTickDate(preparedSeries[index]?.date)}
+          </text>
+        </g>
+      ))}
       <text
-        x={width - pad.right}
-        y={height - 10}
-        textAnchor="end"
-        className="axis-label"
-      >
-        {lastDate}
-      </text>
-      <text
-        x={width - pad.right}
-        y={moveTop + 16}
-        textAnchor="end"
+        x={pad.left + 8}
+        y={priceTop + 16}
         className="lane-label"
       >
-        Actual avg future move
+        Future avg price
       </text>
       <text
-        x={width - pad.right}
+        x={pad.left + 8}
         y={probTop - 8}
-        textAnchor="end"
         className="lane-label"
       >
         Bullish probability
       </text>
+      <text
+        x={pad.left + 8}
+        y={directionTop - 5}
+        className="lane-label"
+      >
+        Prediction direction
+      </text>
+      <text
+        x={width - pad.right}
+        y={directionTop - 5}
+        textAnchor="end"
+        className="axis-label prediction-direction-label"
+      >
+        Bullish / Bearish
+      </text>
+      {lastPoint && (
+        <>
+          <text
+            x={width - pad.right + 8}
+            y={actualLabelY}
+            className="axis-label actual-price-end-label"
+          >
+            Actual
+          </text>
+          <text
+            x={width - pad.right + 8}
+            y={predictedLabelY}
+            className="axis-label predicted-price-end-label"
+          >
+            Pred
+          </text>
+        </>
+      )}
     </svg>
   );
 }
@@ -1002,7 +998,7 @@ function App() {
                 <PriceIndicatorsChart series={progress.price_series} />
               </article>
 
-              <article className="chart-panel">
+              <article className="chart-panel validation-panel">
                 <div className="chart-head">
                   <div>
                     <h2>Validation Accuracy Trail</h2>
@@ -1011,21 +1007,21 @@ function App() {
                       {validationStats.correct} correct /{" "}
                       {validationStats.wrong} wrong, {validationStats.bullish}{" "}
                       bullish / {validationStats.bearish} bearish actuals,{" "}
-                      threshold{" "}
+                      predicted vs actual future price, threshold{" "}
                       {formatPercent(validationStats.decisionThreshold)}
                     </p>
                   </div>
                   <div className="legend validation-legend">
+                    <span className="actual-price-key">Actual price</span>
+                    <span className="predicted-price-key">
+                      Predicted price
+                    </span>
+                    <span className="close-price-key">Current close</span>
                     <span className="probability">Bullish probability</span>
+                    <span className="pred-bullish-key">Bullish call</span>
+                    <span className="pred-bearish-key">Bearish call</span>
                     <span className="threshold-key">Decision threshold</span>
-                    <span className="actual-bullish-key">Actual bullish</span>
-                    <span className="actual-bearish-key">Actual bearish</span>
-                    <span className="missed-bullish-key">
-                      Wrong: actual bullish
-                    </span>
-                    <span className="missed-bearish-key">
-                      Wrong: actual bearish
-                    </span>
+                    <span className="wrong-key">Incorrect prediction</span>
                   </div>
                 </div>
                 <ValidationChart
