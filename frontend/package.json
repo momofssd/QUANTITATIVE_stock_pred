@@ -1,0 +1,21 @@
+{
+  "name": "quant-regime-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c green,cyan \"python -m uvicorn src.api:app --app-dir .. --host 127.0.0.1 --port 8000\" \"vite --host 127.0.0.1 --port 5173\"",
+    "dev:web": "vite --host 127.0.0.1 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "vite": "^6.0.11"
+  }
+}

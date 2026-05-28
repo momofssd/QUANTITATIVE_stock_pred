@@ -1,0 +1,10 @@
+pandas
+numpy
+yfinance==0.2.66
+scikit-learn
+xgboost
+joblib
+google-genai
+fastapi
+uvicorn
+pytest

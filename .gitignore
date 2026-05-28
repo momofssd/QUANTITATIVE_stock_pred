@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/cache/
+data/processed/
+data/raw/
+models/saved_models/
+outputs/
+frontend/node_modules/
+frontend/dist/
