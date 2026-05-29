@@ -10,6 +10,7 @@ const initialForm = {
   oil_ticker: "CL=F",
   horizon_days: 60,
   model: "extratrees",
+  use_gpt_interpreter: false,
 };
 
 const dollar = (value) => (typeof value === "number" ? `$${value.toFixed(2)}` : "-");
@@ -47,16 +48,66 @@ function ZoneRow({ label, value, muted = false }) {
   );
 }
 
+function BulletList({ items }) {
+  if (!items?.length) return null;
+  return (
+    <ul className="ai-list">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
+function parseList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 export default function App() {
   const [form, setForm] = useState(initialForm);
   const [signal, setSignal] = useState(null);
+  const [aiInterpretation, setAiInterpretation] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  async function readError(response, fallback) {
+    try {
+      const body = await response.json();
+      return body.detail || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  async function requestAiInterpretation(signalPayload = signal) {
+    if (!signalPayload) return;
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const response = await fetch("/api/interpret", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(signalPayload),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response, `AI interpretation failed with ${response.status}`));
+      }
+      setAiInterpretation(await response.json());
+    } catch (requestError) {
+      setAiError(requestError.message || "Unable to reach the AI interpretation API.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   async function runAnalysis(event) {
     event?.preventDefault();
     setLoading(true);
     setError("");
+    setAiError("");
+    setAiInterpretation(null);
     try {
       const response = await fetch("/api/predict", {
         method: "POST",
@@ -64,16 +115,13 @@ export default function App() {
         body: JSON.stringify(form),
       });
       if (!response.ok) {
-        let message = `Prediction failed with ${response.status}`;
-        try {
-          const body = await response.json();
-          message = body.detail || message;
-        } catch {
-          // Preserve the status-based message when the server does not return JSON.
-        }
-        throw new Error(message);
+        throw new Error(await readError(response, `Prediction failed with ${response.status}`));
       }
-      setSignal(await response.json());
+      const nextSignal = await response.json();
+      setSignal(nextSignal);
+      if (form.use_gpt_interpreter) {
+        await requestAiInterpretation(nextSignal);
+      }
     } catch (requestError) {
       setError(requestError.message || "Unable to reach the analysis API.");
     } finally {
@@ -88,6 +136,9 @@ export default function App() {
   const zones = signal?.price_zones;
   const technical = signal?.technical_indicators;
   const macro = signal?.macro_context;
+  const aiForecast = aiInterpretation?.near_term_price_forecast;
+  const aiAssessment = aiInterpretation?.technical_assessment;
+  const aiData = aiInterpretation?.technical_data_used;
 
   return (
     <div className="page">
@@ -143,6 +194,14 @@ export default function App() {
                 <option value="xgboost">XGBoost</option>
                 <option value="logistic">Logistic</option>
               </select>
+            </label>
+            <label className="ai-toggle">
+              <input
+                checked={form.use_gpt_interpreter}
+                onChange={(event) => setForm({ ...form, use_gpt_interpreter: event.target.checked })}
+                type="checkbox"
+              />
+              <span>AI interpretation</span>
             </label>
             <button disabled={loading} type="submit">{loading ? "Analyzing..." : "Analyze"}</button>
           </form>
@@ -252,6 +311,91 @@ export default function App() {
                       <ZoneRow label="Macro risk" value={macro.macro_risk_level} />
                     </div>
                   </article>
+                </section>
+
+                <section className="panel ai-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Gemini Interpreter</p>
+                      <h2>AI Interpretation</h2>
+                    </div>
+                    <button disabled={aiLoading || loading} onClick={() => requestAiInterpretation()} type="button">
+                      {aiLoading ? "Generating..." : aiInterpretation ? "Refresh" : "Generate"}
+                    </button>
+                  </div>
+                  {aiError && <div className="inline-error">{aiError}</div>}
+                  {!aiInterpretation && !aiLoading && !aiError && (
+                    <p className="summary">
+                      No AI interpretation has been generated for the current signal.
+                    </p>
+                  )}
+                  {aiLoading && <p className="summary">Sending the quant signal to the AI interpreter...</p>}
+                  {aiInterpretation && (
+                    <div className="ai-content">
+                      <div className="ai-summary">
+                        <strong>{aiInterpretation.final_view?.replaceAll("_", " ")}</strong>
+                        <span>{aiInterpretation.confidence_label} | {fixed(aiInterpretation.confidence_score, 2)}</span>
+                        <p>{aiInterpretation.plain_english_summary}</p>
+                      </div>
+                      <div className="ai-columns">
+                        <div>
+                          <h3>Reasons</h3>
+                          <BulletList items={parseList(aiInterpretation.key_reasons)} />
+                        </div>
+                        <div>
+                          <h3>Risks</h3>
+                          <BulletList items={parseList(aiInterpretation.main_risks)} />
+                        </div>
+                      </div>
+                      {aiForecast && (
+                        <div className="ai-forecast">
+                          <h3>Near-Term Forecast</h3>
+                          <div className="fact-grid">
+                            <ZoneRow label="Scenario" value={aiForecast.selected_scenario?.replaceAll("_", " ")} />
+                            <ZoneRow label="Timeframe" value={aiForecast.estimated_timeframe} />
+                            <ZoneRow label="Target zone" value={aiForecast.target_price_zone} />
+                            <ZoneRow label="Failure zone" muted value={aiForecast.downside_or_failure_zone} />
+                          </div>
+                          <p className="summary">{aiForecast.probability_comment}</p>
+                          <div className="ai-columns">
+                            <div>
+                              <h3>Conditions Needed</h3>
+                              <BulletList items={parseList(aiForecast.conditions_needed)} />
+                            </div>
+                            <div>
+                              <h3>Invalidation</h3>
+                              <BulletList items={parseList(aiForecast.what_would_invalidate_forecast)} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {aiAssessment && (
+                        <div className="ai-assessment">
+                          <h3>Technical Assessment</h3>
+                          <div className="fact-grid">
+                            <ZoneRow label="Trend" value={aiAssessment.trend_health} />
+                            <ZoneRow label="Momentum" value={aiAssessment.momentum_condition} />
+                            <ZoneRow label="Volatility" value={aiAssessment.volatility_condition} />
+                            <ZoneRow label="Relative strength" value={aiAssessment.relative_strength_condition} />
+                            <ZoneRow label="Risk/reward" value={aiAssessment.risk_reward_condition} />
+                          </div>
+                        </div>
+                      )}
+                      {aiData && (
+                        <details className="ai-data">
+                          <summary>Technical data cited</summary>
+                          <div className="ai-columns">
+                            {Object.entries(aiData).map(([key, items]) => (
+                              <div key={key}>
+                                <h3>{key.replaceAll("_", " ")}</h3>
+                                <BulletList items={parseList(items)} />
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )}
                 </section>
               </div>
 

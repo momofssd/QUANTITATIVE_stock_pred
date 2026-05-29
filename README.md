@@ -50,7 +50,7 @@ FastAPI: http://127.0.0.1:8000
 React:   http://127.0.0.1:5173
 ```
 
-The frontend calls `/api/predict`. In development, Vite proxies that request to FastAPI; in production, FastAPI exposes `/api/*` directly and serves the built React application from `frontend/dist`. Web requests default to the lower-resource Extra Trees long-term model and do not write saved report or model artifacts unless `save_outputs: true` or `save_models: true` is supplied. Gemini interpretation is not required for the dashboard's core quantitative results.
+The frontend calls `/api/predict` for the quantitative dashboard and can optionally call `/api/interpret` for the Gemini interpretation panel. In development, Vite proxies those requests to FastAPI; in production, FastAPI exposes `/api/*` directly and serves the built React application from `frontend/dist`. Web requests default to the lower-resource Extra Trees long-term model and do not write saved report or model artifacts unless `save_outputs: true` or `save_models: true` is supplied. Gemini interpretation is not required for the dashboard's core quantitative results.
 
 The web page loads without running the models. A prediction request is made only after the user clicks `Analyze`.
 

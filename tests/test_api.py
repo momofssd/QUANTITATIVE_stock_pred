@@ -45,3 +45,15 @@ def test_predict_rejects_parallel_analysis_request(monkeypatch):
 
     assert response.status_code == 429
     assert response.json()["detail"] == "Another analysis is running. Wait for it to finish and try again."
+
+
+def test_interpret_reports_configuration_failure(monkeypatch):
+    def unavailable_interpreter(_signal_json):
+        raise RuntimeError("Missing Gemini API key.")
+
+    monkeypatch.setattr("src.api.interpret_signal_with_gemini", unavailable_interpreter)
+    client = TestClient(app)
+    response = client.post("/api/interpret", json={"ticker": "SMH"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Missing Gemini API key."

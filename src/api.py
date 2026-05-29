@@ -51,14 +51,20 @@ def predict(request: PredictRequest) -> dict[str, Any]:
 @app.post("/interpret")
 @app.post("/api/interpret")
 def interpret(signal_json: dict[str, Any]) -> dict[str, Any]:
-    return interpret_signal_with_gemini(signal_json)
+    try:
+        return interpret_signal_with_gemini(signal_json)
+    except (ImportError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/predict-and-interpret")
 @app.post("/api/predict-and-interpret")
 def predict_and_interpret(request: PredictRequest) -> dict[str, Any]:
     signal = _generate_signal(request)
-    ai = interpret_signal_with_gemini(signal, model=request.gemini_model) if request.use_gpt_interpreter else None
+    try:
+        ai = interpret_signal_with_gemini(signal, model=request.gemini_model) if request.use_gpt_interpreter else None
+    except (ImportError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"quant_signal": signal, "ai_interpretation": ai}
 
 
