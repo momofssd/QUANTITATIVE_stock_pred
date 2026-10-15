@@ -4,46 +4,35 @@ from src import gpt_interpreter
 def test_gemini_interpreter_mock(monkeypatch):
     expected = {
         "ticker": "TSLA",
-        "final_view": "WAIT_FOR_PULLBACK",
-        "is_current_price_long_term_buy": False,
-        "is_current_price_long_term_sell": False,
-        "preferred_buy_zone": "165-174",
-        "short_term_tactical_buy_zone": "180-185",
-        "breakout_buy_trigger": "195",
-        "trim_or_sell_zone": "215-230",
-        "invalidation_level": "154",
-        "confidence_score": 0.68,
-        "confidence_label": "HIGH",
-        "plain_english_summary": "Wait for a better entry.",
-        "near_term_price_forecast": {
-            "selected_scenario": "base_case_scenario",
-            "estimated_timeframe": "4-8 weeks",
-            "target_price_zone": "185-195",
-            "downside_or_failure_zone": "170-175",
-            "confidence_label": "MEDIUM",
-            "probability_comment": "Base case is most consistent with current conditions.",
-            "conditions_needed": ["Hold above short-term support"],
-            "what_would_invalidate_forecast": ["Close below tactical zone"],
+        "short_term_view": "APPROACHING_ENTRY",
+        "long_term_view": "HOLD_WAIT",
+        "plain_english_summary": "Price is about one ATR above the short-term buy zone.",
+        "short_term_plan": {
+            "entry_zone": "180.10-184.60",
+            "current_position": "NEAR, 1.9% above the zone",
+            "bounce_assessment": "No washout yet; RSI(14) is 44.",
+            "stop_loss": "177.80",
+            "targets": "191.40, then 198.20",
+            "historical_evidence": "58% of 61 touches bounced versus a 49% any-day baseline.",
+            "what_confirms_bounce": ["Close above the prior session high after touching the zone"],
+            "what_invalidates_setup": ["Close below the stop"],
         },
-        "technical_data_used": {
-            "trend": ["Price is above the 200-day average."],
-            "momentum": ["RSI is neutral."],
-            "volatility": ["ATR risk is manageable."],
-            "volume": ["Volume is near average."],
-            "relative_strength": ["Relative strength is improving."],
-            "macro": ["VIX is not spiking."],
+        "long_term_plan": {
+            "buy_zone": "150.00-171.00",
+            "trim_zone": "240.00-262.00",
+            "current_position": "Between zones",
+            "historical_evidence": "Value-zone visits were higher 60 sessions later 64% of the time.",
         },
-        "technical_assessment": {
-            "trend_health": "Constructive",
-            "momentum_condition": "Neutral",
-            "volatility_condition": "Normal",
-            "relative_strength_condition": "Improving",
-            "risk_reward_condition": "Better on pullback",
-        },
-        "key_reasons": ["Trend is constructive"],
-        "main_risks": ["Market regime could weaken"],
+        "key_reasons": ["Buy zone has beaten the baseline"],
+        "main_risks": ["Price is below its 200-day average"],
+        "data_cited": ["RSI(14) 44.0", "ATR 4.52"],
         "not_financial_advice": True,
     }
 
     monkeypatch.setattr(gpt_interpreter, "interpret_signal_with_gemini", lambda signal_json, model=None: expected)
     assert gpt_interpreter.interpret_signal_with_gemini({"ticker": "TSLA"}) == expected
+
+
+def test_interpreter_prompt_omits_chart_rows():
+    report = {"ticker": "TSLA", "chart_data": {"points": [{"close": 1}]}, "short_term": {}}
+    assert gpt_interpreter._without_chart(report) == {"ticker": "TSLA", "short_term": {}}

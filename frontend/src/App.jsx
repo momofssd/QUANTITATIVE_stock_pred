@@ -1,47 +1,29 @@
 import { useState } from "react";
 import MarketChart from "./components/MarketChart";
+import {
+  EvidenceTables,
+  LevelLadder,
+  LongTermCard,
+  ReadinessPanel,
+  ReasonsPanel,
+  ShortTermHero,
+  TradePlanPanel,
+} from "./components/ZonePanels";
+import { dollar, fixed, percent } from "./components/format";
 
 const initialForm = {
   ticker: "SMH",
-  start_date: "2018-01-01",
+  start_date: "2012-01-01",
   benchmark_primary: "QQQ",
   benchmark_secondary: "SPY",
   treasury_yield_ticker: "^TNX",
   oil_ticker: "CL=F",
-  horizon_days: 60,
-  model: "extratrees",
   use_gpt_interpreter: false,
 };
 
-const dollar = (value) => (typeof value === "number" ? `$${value.toFixed(2)}` : "-");
-const percent = (value) => (typeof value === "number" ? `${(value * 100).toFixed(2)}%` : "-");
-const fixed = (value, digits = 2) => (typeof value === "number" ? value.toFixed(digits) : "-");
-
-function toneForSignal(signal) {
-  if (["STRONG_LONG_TERM_BUY", "LONG_TERM_BUY"].includes(signal)) return "positive";
-  if (["ACCUMULATE_ON_PULLBACK", "HOLD", "WAIT"].includes(signal)) return "caution";
-  return "negative";
-}
-
-function toneForShortTerm(action) {
-  if (["BUY_NOW_AT_SUPPORT", "BUY_BREAKOUT_CONFIRMED"].includes(action)) return "positive";
-  if (["BUY_ON_PULLBACK", "BUY_ON_BREAKOUT_CONFIRMATION", "WAIT"].includes(action)) return "caution";
-  return "negative";
-}
-
-function MetricCard({ label, value, supporting, tone = "" }) {
+function ZoneRow({ label, value }) {
   return (
-    <div className={`metric-card ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{supporting}</small>
-    </div>
-  );
-}
-
-function ZoneRow({ label, value, muted = false }) {
-  return (
-    <div className={`zone-row ${muted ? "muted" : ""}`}>
+    <div className="zone-row">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -49,7 +31,7 @@ function ZoneRow({ label, value, muted = false }) {
 }
 
 function BulletList({ items }) {
-  if (!items?.length) return null;
+  if (!Array.isArray(items) || !items.length) return null;
   return (
     <ul className="ai-list">
       {items.map((item) => (
@@ -59,13 +41,93 @@ function BulletList({ items }) {
   );
 }
 
-function parseList(value) {
-  return Array.isArray(value) ? value : [];
+function AiPanel({ interpretation, loading, error, disabled, onGenerate }) {
+  const shortPlan = interpretation?.short_term_plan;
+  const longPlan = interpretation?.long_term_plan;
+  return (
+    <section className="panel ai-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Gemini Interpreter</p>
+          <h2>AI explanation</h2>
+        </div>
+        <button disabled={loading || disabled} onClick={onGenerate} type="button">
+          {loading ? "Generating..." : interpretation ? "Refresh" : "Generate"}
+        </button>
+      </div>
+      {error && <div className="inline-error">{error}</div>}
+      {!interpretation && !loading && !error && (
+        <p className="summary">Optional. Sends the zone report (without chart rows) to Gemini for a plain-language explanation.</p>
+      )}
+      {loading && <p className="summary">Sending the zone report to the AI interpreter...</p>}
+      {interpretation && (
+        <div className="ai-content">
+          <div className="ai-summary">
+            <strong>
+              {interpretation.short_term_view?.replaceAll("_", " ")} · {interpretation.long_term_view?.replaceAll("_", " ")}
+            </strong>
+            <p>{interpretation.plain_english_summary}</p>
+          </div>
+          {shortPlan && (
+            <div className="ai-forecast">
+              <h3>Short-term plan</h3>
+              <div className="fact-grid">
+                <ZoneRow label="Entry zone" value={shortPlan.entry_zone} />
+                <ZoneRow label="Position" value={shortPlan.current_position} />
+                <ZoneRow label="Stop" value={shortPlan.stop_loss} />
+                <ZoneRow label="Targets" value={shortPlan.targets} />
+              </div>
+              <p className="summary">{shortPlan.bounce_assessment}</p>
+              <p className="summary">{shortPlan.historical_evidence}</p>
+              <div className="ai-columns">
+                <div>
+                  <h3>What confirms the bounce</h3>
+                  <BulletList items={shortPlan.what_confirms_bounce} />
+                </div>
+                <div>
+                  <h3>What invalidates it</h3>
+                  <BulletList items={shortPlan.what_invalidates_setup} />
+                </div>
+              </div>
+            </div>
+          )}
+          {longPlan && (
+            <div className="ai-assessment">
+              <h3>Long-term plan</h3>
+              <div className="fact-grid">
+                <ZoneRow label="Buy zone" value={longPlan.buy_zone} />
+                <ZoneRow label="Trim zone" value={longPlan.trim_zone} />
+              </div>
+              <p className="summary">
+                {longPlan.current_position} {longPlan.historical_evidence}
+              </p>
+            </div>
+          )}
+          <div className="ai-columns ai-assessment">
+            <div>
+              <h3>Reasons</h3>
+              <BulletList items={interpretation.key_reasons} />
+            </div>
+            <div>
+              <h3>Risks</h3>
+              <BulletList items={interpretation.main_risks} />
+            </div>
+          </div>
+          {interpretation.data_cited?.length > 0 && (
+            <details className="ai-data">
+              <summary>Data cited</summary>
+              <BulletList items={interpretation.data_cited} />
+            </details>
+          )}
+        </div>
+      )}
+    </section>
+  );
 }
 
 export default function App() {
   const [form, setForm] = useState(initialForm);
-  const [signal, setSignal] = useState(null);
+  const [report, setReport] = useState(null);
   const [aiInterpretation, setAiInterpretation] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
@@ -81,15 +143,15 @@ export default function App() {
     }
   }
 
-  async function requestAiInterpretation(signalPayload = signal) {
-    if (!signalPayload) return;
+  async function requestAiInterpretation(payload = report) {
+    if (!payload) return;
     setAiLoading(true);
     setAiError("");
     try {
       const response = await fetch("/api/interpret", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(signalPayload),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         throw new Error(await readError(response, `AI interpretation failed with ${response.status}`));
@@ -109,18 +171,18 @@ export default function App() {
     setAiError("");
     setAiInterpretation(null);
     try {
-      const response = await fetch("/api/predict", {
+      const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
       if (!response.ok) {
-        throw new Error(await readError(response, `Prediction failed with ${response.status}`));
+        throw new Error(await readError(response, `Analysis failed with ${response.status}`));
       }
-      const nextSignal = await response.json();
-      setSignal(nextSignal);
+      const nextReport = await response.json();
+      setReport(nextReport);
       if (form.use_gpt_interpreter) {
-        await requestAiInterpretation(nextSignal);
+        await requestAiInterpretation(nextReport);
       }
     } catch (requestError) {
       setError(requestError.message || "Unable to reach the analysis API.");
@@ -129,16 +191,11 @@ export default function App() {
     }
   }
 
-  const decision = signal?.decision;
-  const market = signal?.current_market;
-  const fiveDay = signal?.five_day_forecast;
-  const shortTrade = signal?.short_term_trade;
-  const zones = signal?.price_zones;
-  const technical = signal?.technical_indicators;
-  const macro = signal?.macro_context;
-  const aiForecast = aiInterpretation?.near_term_price_forecast;
-  const aiAssessment = aiInterpretation?.technical_assessment;
-  const aiData = aiInterpretation?.technical_data_used;
+  const shortTerm = report?.short_term;
+  const longTerm = report?.long_term;
+  const technical = report?.technical_indicators;
+  const macro = report?.macro_context;
+  const warnings = report?.data_quality?.warnings || [];
 
   return (
     <div className="page">
@@ -146,54 +203,31 @@ export default function App() {
         <div className="brand">
           <span className="brand-block">Q</span>
           <div>
-            <strong>Quant Market Research</strong>
-            <small>Stocks and ETF analysis</small>
+            <strong>Entry Zone Analyzer</strong>
+            <small>Stocks and ETFs</small>
           </div>
         </div>
-        <nav>
-          <span className="active">Research</span>
-          <span>Markets</span>
-          <span>Watchlist</span>
-          <span>Strategy</span>
-        </nav>
-        <div className="disclaimer">Decision support only</div>
+        <div className="disclaimer">Decision support only · not financial advice</div>
       </header>
 
       <main className="content">
         <section className="research-header">
           <div>
-            <p className="eyebrow">Equity Research</p>
-            <h1>{signal?.ticker || form.ticker.toUpperCase()}</h1>
+            <p className="eyebrow">Price-zone research</p>
+            <h1>{report?.ticker || form.ticker.toUpperCase()}</h1>
             <p className="subtitle">
-              Long-term regime and five-trading-day forecast
-              {signal && ` | Data through ${signal.as_of_date}`}
+              Short-term bounce entries, long-term value zones, and sell zones
+              {report && ` | Data through ${report.as_of_date}`}
             </p>
           </div>
           <form className="ticker-form" onSubmit={runAnalysis}>
             <label>
               Symbol
-              <input
-                onChange={(event) => setForm({ ...form, ticker: event.target.value.toUpperCase() })}
-                value={form.ticker}
-              />
+              <input onChange={(event) => setForm({ ...form, ticker: event.target.value.toUpperCase() })} value={form.ticker} />
             </label>
             <label>
               History start
-              <input
-                onChange={(event) => setForm({ ...form, start_date: event.target.value })}
-                type="date"
-                value={form.start_date}
-              />
-            </label>
-            <label>
-              Model
-              <select onChange={(event) => setForm({ ...form, model: event.target.value })} value={form.model}>
-                <option value="extratrees">Extra Trees (fast)</option>
-                <option value="randomforest">Random Forest</option>
-                <option value="auto">Auto ensemble (slower)</option>
-                <option value="xgboost">XGBoost</option>
-                <option value="logistic">Logistic</option>
-              </select>
+              <input onChange={(event) => setForm({ ...form, start_date: event.target.value })} type="date" value={form.start_date} />
             </label>
             <label className="ai-toggle">
               <input
@@ -201,107 +235,77 @@ export default function App() {
                 onChange={(event) => setForm({ ...form, use_gpt_interpreter: event.target.checked })}
                 type="checkbox"
               />
-              <span>AI interpretation</span>
+              <span>AI explanation</span>
             </label>
-            <button disabled={loading} type="submit">{loading ? "Analyzing..." : "Analyze"}</button>
+            <button disabled={loading} type="submit">
+              {loading ? "Analyzing..." : "Analyze"}
+            </button>
           </form>
         </section>
 
         {error && <div className="error-panel">Analysis unavailable: {error}</div>}
-        {loading && !signal && <div className="loading-panel">Training models and preparing chart history...</div>}
-        {!loading && !signal && !error && (
+        {loading && !report && <div className="loading-panel">Loading price history and calibrating zones...</div>}
+        {!loading && !report && !error && (
           <section className="welcome-panel">
             <div>
-              <p className="eyebrow">Start Research</p>
-              <h2>Run an analysis when you are ready.</h2>
+              <p className="eyebrow">Start research</p>
+              <h2>Find where to buy and where to sell.</h2>
               <p>
-                Enter a ticker and click <strong>Analyze</strong> to train the models, load the daily chart,
-                and generate the long-term and five-session outlook.
+                Enter a ticker and click <strong>Analyze</strong>. The app calibrates short-term and long-term buy and sell zones
+                from the ticker's own history, tells you how close the current price is to an entry, and shows how often earlier
+                visits produced a V-shaped bounce.
               </p>
             </div>
             <div className="welcome-steps">
               <div>
                 <strong>1</strong>
-                <span>Choose ticker and model</span>
+                <span>Choose a ticker</span>
               </div>
               <div>
                 <strong>2</strong>
-                <span>Click Analyze</span>
+                <span>Check distance to the entry zone</span>
               </div>
               <div>
                 <strong>3</strong>
-                <span>Review chart and signals</span>
+                <span>Weigh the bounce history and checklist</span>
               </div>
             </div>
           </section>
         )}
 
-        {signal && (
+        {report && (
           <>
-            <section className="metrics-grid">
-              <MetricCard label="Last price" supporting={`As of ${signal.as_of_date}`} value={dollar(market.current_price)} />
-              <MetricCard
-                label="Long-term signal"
-                supporting={`Confidence ${decision.confidence_label} | ${fixed(decision.confidence_score, 4)}`}
-                tone={toneForSignal(decision.final_signal)}
-                value={decision.final_signal.replaceAll("_", " ")}
-              />
-              <MetricCard label="Market regime" supporting="60-session regime model" value={market.regime.replaceAll("_", " ")} />
-              <MetricCard
-                label="Next 5 sessions"
-                supporting={`${fiveDay.confidence_label} | ${percent(fiveDay.confidence_score)}`}
-                tone={fiveDay.predicted_direction === "BULLISH" ? "positive" : "negative"}
-                value={fiveDay.predicted_direction}
-              />
-            </section>
-
-            {shortTrade && (
-              <section className={`short-term-banner ${toneForShortTerm(shortTrade.action)}`}>
-                <div>
-                  <p className="eyebrow">Short-Term Buy Decision</p>
-                  <h2>{shortTrade.is_good_short_term_buy_now ? "BUY NOW SUPPORTED" : "DO NOT BUY NOW"}</h2>
-                  <p>{shortTrade.summary}</p>
-                </div>
-                <div className="short-term-banner-facts">
-                  <div>
-                    <span>Action</span>
-                    <strong>{shortTrade.action.replaceAll("_", " ")}</strong>
-                  </div>
-                  <div>
-                    <span>Pullback Entry</span>
-                    <strong>
-                      {dollar(shortTrade.entry_points.pullback_entry.low)} - {dollar(shortTrade.entry_points.pullback_entry.high)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Breakout Entry</span>
-                    <strong>{dollar(shortTrade.entry_points.breakout_entry.trigger_price)}</strong>
-                  </div>
-                  <div>
-                    <span>Confidence</span>
-                    <strong>{shortTrade.confidence_label} | {percent(shortTrade.confidence_score)}</strong>
-                  </div>
-                </div>
-              </section>
+            {warnings.length > 0 && (
+              <div className="warning-panel">
+                Data warnings: {warnings.join(" ")}
+              </div>
             )}
+            <section className="decision-grid">
+              <ShortTermHero market={report.current_market} shortTerm={shortTerm} />
+              <LongTermCard longTerm={longTerm} />
+            </section>
 
             <div className="dashboard-layout">
               <div className="main-column">
-                <MarketChart forecast={fiveDay} points={signal.chart_data.points} shortTrade={shortTrade} zones={zones} />
+                <MarketChart chart={report.chart_data} longTerm={longTerm} shortTerm={shortTerm} />
+                <ReasonsPanel shortTerm={shortTerm} />
+                <EvidenceTables longTerm={longTerm} shortTerm={shortTerm} />
                 <section className="details-grid">
                   <article className="panel">
-                    <h2>Technical Snapshot</h2>
+                    <h2>Technical snapshot</h2>
                     <div className="fact-grid">
-                      <ZoneRow label="MA 20" value={dollar(technical.ma20)} />
+                      <ZoneRow label="EMA 20" value={dollar(technical.ema20)} />
                       <ZoneRow label="MA 50" value={dollar(technical.ma50)} />
                       <ZoneRow label="MA 200" value={dollar(technical.ma200)} />
-                      <ZoneRow label="RSI (14)" value={fixed(technical.rsi_14)} />
-                      <ZoneRow label="ATR (14)" value={dollar(technical.atr_14)} />
+                      <ZoneRow label="ATR (14)" value={`${dollar(technical.atr_14)} · ${percent(technical.atr_pct)}`} />
+                      <ZoneRow label="RSI (14)" value={fixed(technical.rsi_14, 1)} />
+                      <ZoneRow label="RSI (2)" value={fixed(technical.rsi_2, 1)} />
                       <ZoneRow label="20d return" value={percent(technical.return_20d)} />
+                      <ZoneRow label="Volume vs 20d" value={`${fixed(technical.volume_vs_20d_avg)}x`} />
                     </div>
                   </article>
                   <article className="panel">
-                    <h2>Macro Context</h2>
+                    <h2>Macro context</h2>
                     <div className="fact-grid">
                       <ZoneRow label="VIX" value={fixed(macro.vix_level)} />
                       <ZoneRow label="VIX 5d" value={percent(macro.vix_5d_change)} />
@@ -312,184 +316,42 @@ export default function App() {
                     </div>
                   </article>
                 </section>
-
-                <section className="panel ai-panel">
-                  <div className="panel-heading">
-                    <div>
-                      <p className="eyebrow">Gemini Interpreter</p>
-                      <h2>AI Interpretation</h2>
-                    </div>
-                    <button disabled={aiLoading || loading} onClick={() => requestAiInterpretation()} type="button">
-                      {aiLoading ? "Generating..." : aiInterpretation ? "Refresh" : "Generate"}
-                    </button>
-                  </div>
-                  {aiError && <div className="inline-error">{aiError}</div>}
-                  {!aiInterpretation && !aiLoading && !aiError && (
-                    <p className="summary">
-                      No AI interpretation has been generated for the current signal.
-                    </p>
-                  )}
-                  {aiLoading && <p className="summary">Sending the quant signal to the AI interpreter...</p>}
-                  {aiInterpretation && (
-                    <div className="ai-content">
-                      <div className="ai-summary">
-                        <strong>{aiInterpretation.final_view?.replaceAll("_", " ")}</strong>
-                        <span>{aiInterpretation.confidence_label} | {fixed(aiInterpretation.confidence_score, 2)}</span>
-                        <p>{aiInterpretation.plain_english_summary}</p>
-                      </div>
-                      <div className="ai-columns">
-                        <div>
-                          <h3>Reasons</h3>
-                          <BulletList items={parseList(aiInterpretation.key_reasons)} />
-                        </div>
-                        <div>
-                          <h3>Risks</h3>
-                          <BulletList items={parseList(aiInterpretation.main_risks)} />
-                        </div>
-                      </div>
-                      {aiForecast && (
-                        <div className="ai-forecast">
-                          <h3>Near-Term Forecast</h3>
-                          <div className="fact-grid">
-                            <ZoneRow label="Scenario" value={aiForecast.selected_scenario?.replaceAll("_", " ")} />
-                            <ZoneRow label="Timeframe" value={aiForecast.estimated_timeframe} />
-                            <ZoneRow label="Target zone" value={aiForecast.target_price_zone} />
-                            <ZoneRow label="Failure zone" muted value={aiForecast.downside_or_failure_zone} />
-                          </div>
-                          <p className="summary">{aiForecast.probability_comment}</p>
-                          <div className="ai-columns">
-                            <div>
-                              <h3>Conditions Needed</h3>
-                              <BulletList items={parseList(aiForecast.conditions_needed)} />
-                            </div>
-                            <div>
-                              <h3>Invalidation</h3>
-                              <BulletList items={parseList(aiForecast.what_would_invalidate_forecast)} />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {aiAssessment && (
-                        <div className="ai-assessment">
-                          <h3>Technical Assessment</h3>
-                          <div className="fact-grid">
-                            <ZoneRow label="Trend" value={aiAssessment.trend_health} />
-                            <ZoneRow label="Momentum" value={aiAssessment.momentum_condition} />
-                            <ZoneRow label="Volatility" value={aiAssessment.volatility_condition} />
-                            <ZoneRow label="Relative strength" value={aiAssessment.relative_strength_condition} />
-                            <ZoneRow label="Risk/reward" value={aiAssessment.risk_reward_condition} />
-                          </div>
-                        </div>
-                      )}
-                      {aiData && (
-                        <details className="ai-data">
-                          <summary>Technical data cited</summary>
-                          <div className="ai-columns">
-                            {Object.entries(aiData).map(([key, items]) => (
-                              <div key={key}>
-                                <h3>{key.replaceAll("_", " ")}</h3>
-                                <BulletList items={parseList(items)} />
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                    </div>
-                  )}
-                </section>
+                <AiPanel
+                  disabled={loading}
+                  error={aiError}
+                  interpretation={aiInterpretation}
+                  loading={aiLoading}
+                  onGenerate={() => requestAiInterpretation()}
+                />
               </div>
 
               <aside className="sidebar">
-                <article className="panel result-panel">
-                  <p className="eyebrow">Model Result</p>
-                  <h2 className={toneForSignal(decision.final_signal)}>{decision.final_signal.replaceAll("_", " ")}</h2>
-                  <p className="summary">{decision.summary}</p>
-                  <div className="confidence">
-                    <span>Confidence</span>
-                    <strong>{decision.confidence_label}</strong>
-                    <div><i style={{ width: `${decision.confidence_score * 100}%` }} /></div>
-                  </div>
-                </article>
-
-                <article className="panel">
-                  <h2>Price Zones</h2>
-                  <ZoneRow
-                    label="Preferred buy"
-                    value={`${dollar(zones.preferred_long_term_buy_zone.low)} - ${dollar(zones.preferred_long_term_buy_zone.high)}`}
-                  />
-                  <ZoneRow
-                    label="Tactical pullback"
-                    value={`${dollar(zones.short_term_tactical_buy_zone.low)} - ${dollar(zones.short_term_tactical_buy_zone.high)}`}
-                  />
-                  <ZoneRow label="Breakout trigger" value={dollar(zones.breakout_buy_zone.trigger_price)} />
-                  <ZoneRow
-                    label="Trim zone"
-                    value={`${dollar(zones.trim_or_sell_zone.low)} - ${dollar(zones.trim_or_sell_zone.high)}`}
-                  />
-                  <ZoneRow label="Invalidation" muted value={dollar(zones.invalidation_zone.price)} />
-                </article>
-
-                <article className="panel five-day">
-                  <h2>Five-Session Outlook</h2>
-                  <div className={`direction ${fiveDay.predicted_direction.toLowerCase()}`}>{fiveDay.predicted_direction}</div>
-                  <ZoneRow label="Probability confidence" value={percent(fiveDay.confidence_score)} />
-                  <ZoneRow label="Possible close" value={dollar(fiveDay.possible_price_in_5_trading_days)} />
-                  <ZoneRow
-                    label="Error range"
-                    value={`${dollar(fiveDay.possible_price_range.low)} - ${dollar(fiveDay.possible_price_range.high)}`}
-                  />
-                  <p className="footnote">{fiveDay.interpretation_note}</p>
-                </article>
-
-                {shortTrade && (
-                  <article className="panel short-trade">
-                    <p className="eyebrow">Short-Term Entry Plan</p>
-                    <h2 className={toneForShortTerm(shortTrade.action)}>
-                      {shortTrade.action.replaceAll("_", " ")}
-                    </h2>
-                    <p className="summary">{shortTrade.summary}</p>
-                    <ZoneRow
-                      label="Good buy now?"
-                      value={shortTrade.is_good_short_term_buy_now ? "YES" : "NO"}
-                      muted={!shortTrade.is_good_short_term_buy_now}
-                    />
-                    <ZoneRow
-                      label="Pullback entry"
-                      value={`${dollar(shortTrade.entry_points.pullback_entry.low)} - ${dollar(shortTrade.entry_points.pullback_entry.high)}`}
-                    />
-                    <ZoneRow
-                      label="Breakout entry"
-                      value={dollar(shortTrade.entry_points.breakout_entry.trigger_price)}
-                    />
-                    {shortTrade.has_conditional_buy_setup && (
-                      <ZoneRow label="Stop loss" muted value={dollar(shortTrade.trade_management.stop_loss_price)} />
-                    )}
-                    <ZoneRow
-                      label="Possible 5D close"
-                      value={dollar(shortTrade.trade_management.possible_close_in_5_trading_days)}
-                    />
-                    {shortTrade.has_conditional_buy_setup && (
-                      <ZoneRow
-                        label="Est. reward/risk"
-                        value={`${fixed(shortTrade.trade_management.estimated_reward_to_risk)}x`}
-                      />
-                    )}
-                    <div className="confidence short-confidence">
-                      <span>Setup confidence</span>
-                      <strong>{shortTrade.confidence_label}</strong>
-                      <div><i style={{ width: `${shortTrade.confidence_score * 100}%` }} /></div>
-                    </div>
-                  </article>
-                )}
-
+                <LevelLadder report={report} />
+                <ReadinessPanel readiness={shortTerm.bounce_readiness} />
+                <TradePlanPanel shortTerm={shortTerm} />
                 <details className="panel signal-key">
-                  <summary>Signal Definitions</summary>
-                  {Object.entries(signal.available_signals).map(([key, meaning]) => (
-                    <div className={key === decision.final_signal ? "selected-signal" : ""} key={key}>
-                      <strong>{key.replaceAll("_", " ")}</strong>
-                      <p>{meaning}</p>
+                  <summary>How the zones are built</summary>
+                  <div>
+                    <p>{report.methodology.summary}</p>
+                  </div>
+                  <div>
+                    <strong>Short-term buy / take-profit</strong>
+                    <p>{shortTerm.buy_zone.basis}; {shortTerm.sell_zone.basis}.</p>
+                  </div>
+                  {longTerm.available && (
+                    <div>
+                      <strong>Long-term value / trim</strong>
+                      <p>{longTerm.buy_zone.basis}; {longTerm.sell_zone.basis}.</p>
                     </div>
-                  ))}
+                  )}
+                  <div>
+                    <strong>Bounce replay</strong>
+                    <p>{shortTerm.history.buy_zone.definition}</p>
+                  </div>
+                  <div>
+                    <strong>Levels apply to</strong>
+                    <p>The {report.methodology.levels_apply_to}.</p>
+                  </div>
                 </details>
               </aside>
             </div>

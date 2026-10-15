@@ -50,24 +50,7 @@ def _build_chart_data(features: pd.DataFrame, periods: int = 180) -> dict:
     }
 
 
-def build_signal_json(
-    ticker: str,
-    as_of_date: str,
-    benchmark_primary: str,
-    benchmark_secondary: str,
-    treasury_yield_ticker: str,
-    oil_ticker: str,
-    features: pd.DataFrame,
-    regime: str,
-    probabilities: dict[str, float],
-    decision_result: DecisionResult,
-    model_metadata: dict,
-    five_day_forecast: dict | None = None,
-    short_term_trade: dict | None = None,
-    data_warnings: list[str] | None = None,
-) -> dict:
-    latest = features.iloc[-1]
-    missing_fields = [col for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"] if col not in features.columns]
+def build_macro_context(latest: pd.Series, treasury_yield_ticker: str, oil_ticker: str) -> dict:
     vix_level = clean_float(latest.get("vix_level"), 2)
     vix_5d_change = clean_float(latest.get("vix_5d_change"))
     vix_change = clean_float(latest.get("vix_20d_change"))
@@ -97,7 +80,49 @@ def build_signal_json(
         and (oil_20d_change is None or oil_20d_change < 0.15)
     ):
         macro_risk = "LOW"
+    return {
+        "vix_level": vix_level,
+        "vix_5d_change": vix_5d_change,
+        "vix_20d_change": vix_change,
+        "vix_60d_change": vix_60d_change,
+        "vix_20d_slope_per_session": vix_20d_slope,
+        "vix_change_units": "decimal_return",
+        "treasury_yield_benchmark": treasury_yield_ticker.upper(),
+        "ten_year_yield": yield_level,
+        "ten_year_yield_5d_change": yield_5d_change,
+        "ten_year_yield_20d_change": yield_20d_change,
+        "ten_year_yield_60d_change": yield_60d_change,
+        "ten_year_yield_20d_slope_per_session": yield_20d_slope,
+        "ten_year_yield_change_units": "percentage_points",
+        "oil_benchmark": oil_ticker.upper(),
+        "oil_price": oil_price,
+        "oil_5d_change": oil_5d_change,
+        "oil_20d_change": oil_20d_change,
+        "oil_60d_change": oil_60d_change,
+        "oil_20d_slope_per_session": oil_20d_slope,
+        "oil_change_units": "decimal_return",
+        "macro_risk_level": macro_risk,
+    }
 
+
+def build_signal_json(
+    ticker: str,
+    as_of_date: str,
+    benchmark_primary: str,
+    benchmark_secondary: str,
+    treasury_yield_ticker: str,
+    oil_ticker: str,
+    features: pd.DataFrame,
+    regime: str,
+    probabilities: dict[str, float],
+    decision_result: DecisionResult,
+    model_metadata: dict,
+    five_day_forecast: dict | None = None,
+    short_term_trade: dict | None = None,
+    data_warnings: list[str] | None = None,
+) -> dict:
+    latest = features.iloc[-1]
+    missing_fields = [col for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"] if col not in features.columns]
     signal = {
         "schema_version": "2.2",
         "ticker": ticker.upper(),
@@ -156,29 +181,7 @@ def build_signal_json(
             "target_vs_spy_20d_change": clean_float(latest.get("rs_20d_change")),
             "rs_status": "IMPROVING" if (latest.get("rs_20d_change", 0) or 0) > 0 else "WEAKENING",
         },
-        "macro_context": {
-            "vix_level": vix_level,
-            "vix_5d_change": vix_5d_change,
-            "vix_20d_change": vix_change,
-            "vix_60d_change": vix_60d_change,
-            "vix_20d_slope_per_session": vix_20d_slope,
-            "vix_change_units": "decimal_return",
-            "treasury_yield_benchmark": treasury_yield_ticker.upper(),
-            "ten_year_yield": yield_level,
-            "ten_year_yield_5d_change": yield_5d_change,
-            "ten_year_yield_20d_change": yield_20d_change,
-            "ten_year_yield_60d_change": yield_60d_change,
-            "ten_year_yield_20d_slope_per_session": yield_20d_slope,
-            "ten_year_yield_change_units": "percentage_points",
-            "oil_benchmark": oil_ticker.upper(),
-            "oil_price": oil_price,
-            "oil_5d_change": oil_5d_change,
-            "oil_20d_change": oil_20d_change,
-            "oil_60d_change": oil_60d_change,
-            "oil_20d_slope_per_session": oil_20d_slope,
-            "oil_change_units": "decimal_return",
-            "macro_risk_level": macro_risk,
-        },
+        "macro_context": build_macro_context(latest, treasury_yield_ticker, oil_ticker),
         "risk_management": decision_result.risk_management,
         "reasoning": {
             "technical_score": decision_result.technical_score,

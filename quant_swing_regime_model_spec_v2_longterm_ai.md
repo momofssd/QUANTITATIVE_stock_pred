@@ -678,7 +678,7 @@ Very short invalid-looking keys are ignored.
 The default model constant is:
 
 ```python
-DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 ```
 
 ## Skill File Usage
@@ -781,7 +781,7 @@ Example request:
   "horizon_days": 60,
   "model": "auto",
   "use_gpt_interpreter": true,
-  "gemini_model": "gemini-3.1-pro-preview"
+  "gemini_model": "gemini-3.8-flash"
 }
 ```
 

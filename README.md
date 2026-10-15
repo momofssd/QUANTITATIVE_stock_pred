@@ -1,8 +1,15 @@
-# Quant Swing Regime Model V2
+# Quant Entry Zone Analyzer
 
-Python and React app for medium-to-long-term stock/ETF regime analysis. It downloads daily OHLCV data with `yfinance`, builds technical, macro, and relative-strength features, trains purged time-split forecast models, calculates long-term buy/trim/invalidation zones, and can send the quant JSON to Gemini for a structured second interpretation.
+Python and React app that shows **where to buy and where to sell** a stock or ETF instead of predicting its price. It downloads daily OHLCV data, calibrates four price zones from the ticker's own history, and replays every earlier visit to each zone so you can see how price behaved afterwards.
 
-This is decision support, not financial advice. It is not a day-trading signal.
+- **Short-term buy zone**: where price would be stretched below its 20-day EMA by as much as the ticker's 5th-20th percentile over the last 3 years, measured in ATRs. This is the V-bounce entry area.
+- **Short-term take-profit zone**: the same stretch at the 80th-95th percentile above the EMA.
+- **Long-term value zone**: the 200-day MA adjusted by the ticker's 5th-25th percentile distance from it over the last 5 years.
+- **Long-term trim zone**: the same distance at the 85th-97th percentile.
+
+For each zone the dashboard tells you whether the current price is inside, near, below, or away from it, and how far it would have to move. No model is trained, so an analysis takes about a second.
+
+This is decision support, not financial advice.
 
 ## Setup
 
@@ -18,22 +25,30 @@ The app reads `.env`. Supported Gemini key names:
 GEMINI_API_KEY=...
 GOOGLE_API_KEY=...
 gemini=...
-GEMINI_MODEL=gemini-3.1-pro-preview
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 Key lookup prefers `GEMINI_API_KEY`, then `gemini`, then `GOOGLE_API_KEY`, and ignores invalid-looking very short values.
 
-The default Gemini model is `gemini-3.1-pro-preview`. You can set `GEMINI_MODEL` or pass `--gemini-model` to override it.
+The default Gemini model is `gemini-3.8-flash`. You can set `GEMINI_MODEL` or pass `--gemini-model` to override it.
 
 ## Web Dashboard
 
-The React frontend provides a readable research dashboard with:
+The React frontend shows:
 
-- adjusted daily candlestick chart and volume
-- MA20, MA50, and MA200 overlays
-- RSI and MACD study panes
-- concise long-term signal, five-session forecast, short-term entry plan, price zones, technical indicators, and macro context
-- expandable definitions for every final signal
+- **Short-term entry card**: action (`ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics
+- **Long-term card**: action (`ACCUMULATE`, `DEEP_VALUE_TREND_RISK`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), value and trim zones, distance from the 200-day MA, and 60-session outcomes after earlier visits
+- **Chart**: adjusted daily candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome, and a stretch / RSI / MACD lower pane
+- **Price ladder**: every level, highest first, with the move needed from the current price
+- **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
+- **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
+- **Historical replay tables**, technical and macro context, and an optional Gemini explanation
+
+### Reading the bounce statistics
+
+A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
+
+Levels are causal: the zone that applied on a day was computed only from data before it. The zones shown for the next session must be recomputed after every daily close.
 
 From the repository root:
 
@@ -50,13 +65,9 @@ FastAPI: http://127.0.0.1:8000
 React:   http://127.0.0.1:5173
 ```
 
-The frontend calls `/api/predict` for the quantitative dashboard and can optionally call `/api/interpret` for the Gemini interpretation panel. In development, Vite proxies those requests to FastAPI; in production, FastAPI exposes `/api/*` directly and serves the built React application from `frontend/dist`. Web requests default to the lower-resource Extra Trees long-term model and do not write saved report or model artifacts unless `save_outputs: true` or `save_models: true` is supplied. Gemini interpretation is not required for the dashboard's core quantitative results.
+The frontend calls `/api/analyze` for the zone report and can optionally call `/api/interpret` for the Gemini panel. In development, Vite proxies those requests to FastAPI; in production, FastAPI exposes `/api/*` directly and serves the built React application from `frontend/dist`. Gemini receives the report without the per-session chart rows and is instructed to explain the supplied levels and statistics, never to invent new ones.
 
-The web page loads without running the models. A prediction request is made only after the user clicks `Analyze`.
-
-Select `Auto ensemble (slower)` in the web form, or submit `"model": "auto"` in an API request, to train multiple long-term models and use a validation-weighted soft-vote ensemble. This can take materially longer than the interactive Extra Trees default on small hosted instances.
-
-The optional Gemini endpoints receive the full quant JSON, including technical indicators, macro context, price zones, model probabilities, and forecast outputs. They may explain supplied levels, but must not invent replacement prices.
+Long-term zones need roughly two years of history, and the replay is more reliable with more. The default history start is `2012-01-01`.
 
 ## API
 
@@ -64,22 +75,16 @@ The optional Gemini endpoints receive the full quant JSON, including technical i
 python -m uvicorn src.api:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-The FastAPI server entry point is [src/api.py](src/api.py), where `app = FastAPI(...)` and the `/predict` routes are defined.
-
 Endpoints:
 
 ```text
-GET  /health
-POST /predict
-POST /interpret
-POST /predict-and-interpret
-GET  /api/health
-POST /api/predict
-POST /api/interpret
-POST /api/predict-and-interpret
+GET  /health                  GET  /api/health
+POST /analyze                 POST /api/analyze
+POST /interpret               POST /api/interpret
+POST /analyze-and-interpret   POST /api/analyze-and-interpret
 ```
 
-Example `/predict` input:
+Example `/analyze` input:
 
 ```json
 {
@@ -88,14 +93,11 @@ Example `/predict` input:
   "benchmark_secondary": "SPY",
   "treasury_yield_ticker": "^TNX",
   "oil_ticker": "CL=F",
-  "start_date": "2012-01-01",
-  "horizon_days": 60
+  "start_date": "2012-01-01"
 }
 ```
 
-The `/predict` response includes `chart_data.points` for the web chart, `five_day_forecast`, `short_term_trade`, macro time-series context, and `available_signals`.
-
-`short_term_trade` is a separate short-horizon execution assessment. The dashboard displays its buy-now decision in a banner above the Daily Price Chart and repeats the status in the chart legend. It exposes tactical pullback and confirmed-breakout entry points, and only supplies a stop-loss and estimated reward/risk when a conditional buy setup is active. A bearish five-session model results in `AVOID_SHORT_TERM_BUY`, even when future levels remain visible to monitor.
+The response (`schema_version` 3.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `long_term`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py) and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
 
 ## Render Deployment
 
@@ -119,15 +121,12 @@ Health check path:
 /health
 ```
 
-Render honors the root `.python-version` file during a new build. If Yahoo cannot be reached from the running service, prediction requests return `503` with a market-data availability message; the dashboard displays that message instead of a server traceback.
+Render honors the root `.python-version` file during a new build. If Yahoo cannot be reached from the running service, analysis requests return `503` with a market-data availability message; the dashboard displays that message instead of a server traceback.
 
 Daily histories for the target, benchmarks, VIX, Treasury yield, and oil are requested concurrently to keep the first analysis request responsive on hosted instances. The backend logs the start and completion time for each analysis request.
 
-Only one model analysis runs at a time in a server process. A concurrent request returns HTTP `429` instead of competing for the instance's memory. Tree-based estimators use one internal worker on the hosted web path, and selecting the default Extra Trees model does not load XGBoost.
-
 ## Notes
 
-- Features use past and current daily data only.
-- Labels use future 60-day return for supervised training, then labels are excluded from features.
-- Validation uses a purged time-based holdout, not a random split.
-- If `xgboost` is unavailable, training falls back to `RandomForestClassifier`.
+- The previous prediction pipeline (`predict.py`, `train.py`, `five_day_forecast.py`, `decision_engine.py`, `short_term_trade.py`) is no longer used by the API or dashboard. It remains in the repository for reference.
+- Only one analysis runs at a time in a server process; a concurrent request returns HTTP `429`.
+- If Yahoo cannot be reached, analysis requests return `503` with a market-data availability message.
