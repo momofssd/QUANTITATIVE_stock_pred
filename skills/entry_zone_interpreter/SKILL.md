@@ -13,7 +13,7 @@ The JSON (`schema_version` 3.x, `analysis_type: price_zones`) contains:
 
 - `current_market`: price, daily change, trend label
 - `short_term`: action, buy zone, sell zone, stretch, bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.confirmed_entry`, `history.sell_zone`, `history.breakdown`), `historical_edge`, reasons, risks
-- `long_term`: action, value zone, trim zone, distance from the 200-day MA, historical replays (`history.buy_zone`, `history.sell_zone`)
+- `long_term`: action, `trade_plan` (3:1 entry, stop, target, reward/risk now), `historical_edge`, value zone, trim zone, distance from the 200-day MA, historical replays (`history.buy_zone`, `history.sell_zone`, `history.plan`)
 - `trend_outlook.short_term` / `trend_outlook.long_term`: probability of a higher close in 10 / 60 sessions
 - `technical_indicators`, `macro_context`, `data_quality`
 
@@ -55,10 +55,18 @@ How to read a short-term row, in this order:
 6. **Verdict**: one sentence on what the row means for the trader.
 
 **Long-term rows** (`long_term.history`): visits at least 20 sessions apart, outcome measured 60 sessions later.
-- `buy_zone`: worked = higher close 60 sessions later. Report the rate, `median_forward_return`, and `median_max_drawdown` (how deep it usually fell first).
+- `buy_zone`: worked = higher close 60 sessions later. Always compare the rate with `baseline_success_rate` (the same test from any day); most stocks close higher 60 sessions later on most days, so a high rate alone proves nothing. Report `edge_vs_baseline`, `median_forward_return` vs `baseline_median_forward_return`, and `median_max_drawdown` (how deep it usually fell first).
 - `sell_zone`: worked = lower close 60 sessions later, i.e. trimming avoided a decline. A low rate with a positive `median_forward_return` means trimming there usually cost money; say so plainly.
 
+- `plan`: the long-term 3:1 plan, scored in R (profit or loss as a multiple of the planned risk). Explain R once. The key comparison is `expectancy_r` vs `baseline_expectancy_r` (the same stop and target bought on any day); `edge_r` is the difference. A 3:1 plan wins less than half the time by design; never present `success_rate` against 100%.
+
 Never call a replay rate a probability or a prediction. Say "in past visits".
+
+### Long-term plan
+- `trade_plan.entry` is the highest price that offers `min_reward_risk` (3:1) to `target` with the `stop`. Give all three prices and how far price is from the entry (`distance_to_entry_pct`; positive means price must fall that much).
+- `reward_risk_now` is reward/risk if bought today. Always pair it with `risk_to_stop_now_pct`: a high ratio with the stop only a few percent away is a tight stop, not a bargain.
+- Action meanings: accumulate = at or below the 3:1 entry; in value zone with reward/risk under 3:1 = cheap but the stop is too far for 3:1; below value zone = cheaper than the zone but above the 3:1 entry; below long-term stop = the plan is invalidated.
+- `long_term.historical_edge` grades the plan against buying on any day. Do not describe the long-term entry as favorable when the grade is no edge or thin sample.
 
 ### Trend outlook
 - `probability_bullish` is the headline. When `probability_source` is `base_rate`, it is only how often the ticker closed higher over that horizon historically. Say that plainly and do not call it a forecast.
@@ -116,8 +124,9 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 | Wait for reversal close | … | …% | …% | ± … pts |
 | Take profit at first touch | … | …% | …% | ± … pts |
 | Close below swing-low support (kept falling) | … | …% | …% | ± … pts |
-| Long-term value zone (60 sessions) | … | …% | — | median return …% |
-| Long-term trim zone (60 sessions) | … | …% | — | median return …% |
+| Long-term value zone (60 sessions) | … | …% | …% | ± … pts |
+| Long-term trim zone (60 sessions) | … | …% | …% | ± … pts |
+| Long-term 3:1 plan (avg R) | … | …R | …R | ± …R |
 
 #### What this means
 - One bullet per row, following the reading steps above.
@@ -126,7 +135,7 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 
 **`trend_outlook_markdown`**: one bullet per horizon (10 and 60 sessions) giving the bullish probability, whether it is a base rate or a tested model call, and the model's test result in plain words.
 
-**`long_term_markdown`**: where price sits between the value and trim zones, its distance from the 200-day MA, and what past visits to each zone produced.
+**`long_term_markdown`**: the 3:1 plan first (entry, stop, target, distance to the entry, reward/risk now with the stop distance), then where price sits between the value and trim zones, its distance from the 200-day MA, and how the plan and the zones did against buying on any day.
 
 **`key_reasons`, `main_risks`**: 3–5 short plain sentences each, no markdown.
 

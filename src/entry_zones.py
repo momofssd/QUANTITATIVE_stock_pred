@@ -28,6 +28,10 @@ SHORT_TERM_BUY_PCTL = (0.05, 0.20)
 SHORT_TERM_SELL_PCTL = (0.80, 0.95)
 LONG_TERM_BUY_PCTL = (0.05, 0.25)
 LONG_TERM_SELL_PCTL = (0.85, 0.97)
+# Deeper below the 200-day MA than 98% of the lookback: the long-term thesis is broken.
+LONG_TERM_STOP_PCTL = 0.02
+LONG_TERM_MIN_RR = 3.0
+LONG_TERM_PLAN_HORIZON = 250
 SHORT_TERM_HORIZON = 10
 LONG_TERM_HORIZON = 60
 LONG_TERM_COOLDOWN = 20
@@ -89,6 +93,8 @@ def compute_zone_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
         for edge, level in zip(("low", "high"), pctls):
             q = quantile(frame["lt_dev"], LONG_TERM_LOOKBACK, level)
             frame[f"next_{key}_{edge}"] = frame["ma200"] * (1 + q)
+    frame["next_lt_stop"] = frame["ma200"] * (1 + quantile(frame["lt_dev"], LONG_TERM_LOOKBACK, LONG_TERM_STOP_PCTL))
+    frame["lt_stop"] = frame["next_lt_stop"].shift()
     for key in ZONE_KEYS:
         for edge in ("low", "high"):
             frame[f"{key}_{edge}"] = frame[f"next_{key}_{edge}"].shift()
@@ -355,13 +361,23 @@ def forward_return_study(
         )
     graded = [episode for episode in episodes if episode["complete"]]
     current_trend_up = bool(ma200.iloc[-1] > ma200.iloc[-21]) if len(ma200.dropna()) > 21 else False
+    any_day = np.flatnonzero(valid)
+    any_day = any_day[any_day + horizon <= n - 1]
+    baseline_returns = closes[any_day + horizon] / closes[any_day] - 1
+    success_rate = _rate([episode["success"] for episode in graded])
+    baseline_rate = _rate(list(baseline_returns > 0 if side == "buy" else baseline_returns < 0))
     return {
         "side": side,
         "horizon_sessions": horizon,
         "episodes": len(graded),
         "sufficient_sample": len(graded) >= MIN_EPISODES,
-        "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
+        "success_rate": clean_float(success_rate),
+        "baseline_success_rate": clean_float(baseline_rate),
+        "edge_vs_baseline": (
+            clean_float(success_rate - baseline_rate) if success_rate is not None and baseline_rate is not None else None
+        ),
         "median_forward_return": clean_float(_median([episode["forward_return"] for episode in graded])),
+        "baseline_median_forward_return": clean_float(_median(list(baseline_returns))),
         "median_max_drawdown": clean_float(_median([episode["max_drawdown"] for episode in graded])),
         "median_max_run_up": clean_float(_median([episode["max_run_up"] for episode in graded])),
         "by_trend": _summarize_context(episodes, current_trend_up),
@@ -372,6 +388,117 @@ def forward_return_study(
                 if side == "buy"
                 else f"Success = lower close {horizon} sessions later (the trim avoided a drawdown)."
             )
+            + " Baseline = the same test from every session's close."
+        ),
+        "recent_episodes": episodes,
+    }
+
+
+def high_rr_entry(stop, target, zone_top, min_rr: float = LONG_TERM_MIN_RR):
+    """Highest price at or below the value-zone top whose reward to `target` is `min_rr` times its risk to `stop`."""
+    return np.minimum((target + min_rr * stop) / (1 + min_rr), zone_top)
+
+
+def _r_multiple(
+    opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+    i: int, horizon: int, entry: float, stop: float, target: float, include_entry_day: bool,
+) -> tuple[str, float | None, int | None]:
+    """Grade a long entry in R (multiples of the planned risk). A gap through the stop exits at the open."""
+    outcome, target_day, *_ = _bracket(highs, lows, i, horizon, target, stop, "buy", include_entry_day)
+    risk = entry - stop
+    end = min(i + horizon, len(closes) - 1)
+    if outcome == "success":
+        return outcome, (target - entry) / risk, target_day
+    if outcome == "failed":
+        first = i if include_entry_day else i + 1
+        day = first + int(np.flatnonzero(lows[first:end + 1] <= stop)[0])
+        exit_price = min(opens[day], stop) if day > i else stop
+        return outcome, (exit_price - entry) / risk, None
+    if outcome == "expired":
+        return outcome, (closes[end] - entry) / risk, None
+    return outcome, None, None
+
+
+def long_term_plan_study(
+    ohlc: pd.DataFrame,
+    zones: pd.DataFrame,
+    min_rr: float = LONG_TERM_MIN_RR,
+    horizon: int = LONG_TERM_PLAN_HORIZON,
+    cooldown: int = LONG_TERM_COOLDOWN,
+) -> dict:
+    """Replay the long-term plan and score it in R against entering on any day.
+
+    Entry: a limit at the highest value-zone price offering `min_rr` to the
+    target (bottom of the trim zone) with the stop at the LONG_TERM_STOP_PCTL
+    level; fills at the open if price gaps below it. Levels are fixed at entry.
+    Each trade ends at the target, the stop, or after `horizon` sessions at the
+    close. The baseline enters at every session's close with the same stop and
+    target, so the edge shows what waiting for the entry price was worth.
+    """
+    opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
+    stop, target = zones["lt_stop"].to_numpy(), zones["lt_sell_low"].to_numpy()
+    limit = high_rr_entry(stop, target, zones["lt_buy_high"].to_numpy(), min_rr)
+    trend_up = (zones["ma200"].shift() > zones["ma200"].shift(21)).to_numpy()
+    with np.errstate(invalid="ignore"):
+        filled = np.isfinite(limit) & np.isfinite(stop) & np.isfinite(target) & (lows <= limit)
+    episodes: list[dict] = []
+    last_start = -cooldown - 1
+    for i in np.flatnonzero(filled):
+        entry = min(opens[i], limit[i])
+        if i - last_start <= cooldown or not stop[i] < entry < target[i]:
+            continue
+        last_start = i
+        outcome, r, target_day = _r_multiple(opens, highs, lows, closes, int(i), horizon, entry, stop[i], target[i], True)
+        episodes.append(
+            {
+                "index": int(i),
+                "date": str(ohlc.index[i].date()),
+                "entry": float(entry),
+                "stop": float(stop[i]),
+                "target": float(target[i]),
+                "planned_rr": float((target[i] - entry) / (entry - stop[i])),
+                "outcome": outcome,
+                "success": outcome == "success",
+                "complete": outcome != "pending",
+                "trend_up": bool(trend_up[i]),
+                "r_multiple": r,
+                "days_to_target": target_day,
+            }
+        )
+    next_stop, next_target = zones["next_lt_stop"].to_numpy(), zones["next_lt_sell_low"].to_numpy()
+    baseline: list[float] = []
+    for i in range(len(closes) - horizon):
+        if np.isfinite(next_stop[i]) and np.isfinite(next_target[i]) and next_stop[i] < closes[i] < next_target[i]:
+            baseline.append(_r_multiple(opens, highs, lows, closes, i, horizon, closes[i], next_stop[i], next_target[i], False)[1])
+    graded = [episode for episode in episodes if episode["complete"]]
+    expectancy = float(np.mean([episode["r_multiple"] for episode in graded])) if graded else None
+    baseline_expectancy = float(np.mean(baseline)) if baseline else None
+    ma200 = zones["ma200"]
+    return {
+        "side": "plan",
+        "horizon_sessions": horizon,
+        "min_reward_risk": min_rr,
+        "episodes": len(graded),
+        "sufficient_sample": len(graded) >= MIN_EPISODES,
+        "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
+        "stop_rate": clean_float(_rate([episode["outcome"] == "failed" for episode in graded])),
+        "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
+        "win_rate": clean_float(_rate([episode["r_multiple"] > 0 for episode in graded])),
+        "expectancy_r": clean_float(expectancy, 2),
+        "baseline_expectancy_r": clean_float(baseline_expectancy, 2),
+        "edge_r": (
+            clean_float(expectancy - baseline_expectancy, 2) if expectancy is not None and baseline_expectancy is not None else None
+        ),
+        "median_planned_rr": clean_float(_median([episode["planned_rr"] for episode in graded]), 2),
+        "median_days_to_target": clean_float(
+            _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
+        ),
+        "by_trend": _summarize_context(episodes, bool(ma200.iloc[-1] > ma200.iloc[-21]) if len(ma200.dropna()) > 21 else False),
+        "definition": (
+            f"Buy at the highest value-zone price that offers {min_rr:g}:1 to the bottom of the trim zone, with the stop at the "
+            f"level deeper below the 200-day MA than {1 - LONG_TERM_STOP_PCTL:.0%} of the last 5 years. Each trade ends at the "
+            f"target, the stop, or after {horizon} sessions. Results are in R (multiples of the planned risk). "
+            "Baseline = the same stop and target entered at every session's close."
         ),
         "recent_episodes": episodes,
     }

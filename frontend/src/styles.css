@@ -295,7 +295,7 @@ h1 {
 .decision-grid {
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 22px 0;
 }
 
@@ -707,6 +707,10 @@ h1 {
   background: repeating-linear-gradient(90deg, var(--zone-buy) 0 3px, transparent 3px 5px);
 }
 
+.ladder-row.line.lt-entry .ladder-swatch i {
+  background: var(--zone-buy);
+}
+
 .ladder-row.line.broken .ladder-swatch i {
   background: var(--down);
 }
@@ -818,6 +822,39 @@ h1 {
   font-weight: 700;
 }
 
+.evidence-table thead th[title] {
+  cursor: help;
+}
+
+.column-definitions {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 6px 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  line-height: 1.45;
+  margin: 12px 0 0;
+}
+
+.column-definitions div {
+  display: flex;
+  gap: 6px;
+}
+
+.column-definitions dt {
+  color: var(--text);
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.column-definitions dt::after {
+  content: ":";
+}
+
+.column-definitions dd {
+  margin: 0;
+}
+
 /* Chart */
 
 .chart-card {
@@ -919,6 +956,18 @@ h1 {
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
+.swatch.touch.sell {
+  background: var(--zone-sell);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  margin-left: -4px;
+}
+
+.swatch.touch-long {
+  background: var(--zone-buy);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  width: 10px;
+}
+
 .legend-item {
   font-weight: 700;
   padding-left: 14px;
@@ -992,7 +1041,8 @@ h1 {
   font-weight: 700;
 }
 
-.touch-note.st_buy {
+.touch-note.st_buy,
+.touch-note.lt_buy {
   color: var(--zone-buy);
 }
 
@@ -1001,11 +1051,50 @@ h1 {
 }
 
 .market-chart {
+  cursor: crosshair;
   display: block;
   height: auto;
   margin-top: 10px;
   overflow: visible;
+  touch-action: none;
+  user-select: none;
   width: 100%;
+}
+
+.market-chart.panning {
+  cursor: grabbing;
+}
+
+.chart-latest {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  margin-left: auto;
+  padding: 3px 10px;
+}
+
+.chart-resize-handle {
+  align-items: center;
+  cursor: ns-resize;
+  display: flex;
+  height: 14px;
+  justify-content: center;
+  touch-action: none;
+}
+
+.chart-resize-handle span {
+  background: var(--border);
+  border-radius: 2px;
+  height: 4px;
+  width: 48px;
+}
+
+.chart-resize-handle:hover span {
+  background: var(--muted);
 }
 
 .chart-footnote {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -14,6 +15,8 @@ from ..utils import PROJECT_ROOT
 
 
 REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+# Open-ended downloads include the session in progress, so their cache goes stale quickly.
+LIVE_CACHE_SECONDS = 300
 
 
 class MarketDataUnavailableError(ValueError):
@@ -107,9 +110,11 @@ def download_ohlcv(ticker: str, start: str, end: str | None = None, cache: bool 
     cache_dir = PROJECT_ROOT / "data" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     safe_ticker = ticker.replace("^", "INDEX_").replace("/", "_")
-    end_part = end or str(date.today())
-    cache_path = cache_dir / f"{safe_ticker}_{start}_{end_part}.csv"
-    if cache and cache_path.exists():
+    # An explicit past end date is a fixed snapshot; anything reaching today is live data.
+    live = end is None or date.fromisoformat(end) > date.today()
+    cache_path = cache_dir / f"{safe_ticker}_{start}_{'latest' if end is None else end}.csv"
+    fresh = cache_path.exists() and (not live or time.time() - cache_path.stat().st_mtime < LIVE_CACHE_SECONDS)
+    if cache and fresh:
         return pd.read_csv(cache_path, index_col="Date", parse_dates=True)
 
     try:

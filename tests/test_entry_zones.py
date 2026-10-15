@@ -11,6 +11,9 @@ from src.entry_zones import (
     adjusted_ohlcv,
     breakdown_study,
     compute_zone_frame,
+    forward_return_study,
+    high_rr_entry,
+    long_term_plan_study,
     position_in_zone,
     reversion_study,
     swing_support,
@@ -50,7 +53,7 @@ def test_zone_levels_are_causal():
     full = compute_zone_frame(adjusted_ohlcv(features))
     cutoff = 1200
     truncated = compute_zone_frame(adjusted_ohlcv(features.iloc[:cutoff]))
-    columns = ["st_buy_low", "st_buy_high", "st_sell_low", "lt_buy_low", "lt_sell_high", "next_st_buy_high"]
+    columns = ["st_buy_low", "st_buy_high", "st_sell_low", "lt_buy_low", "lt_sell_high", "next_st_buy_high", "lt_stop", "next_lt_stop"]
     pd.testing.assert_frame_equal(full[columns].iloc[:cutoff], truncated[columns])
 
 
@@ -221,3 +224,65 @@ def test_close_above_swing_low_is_not_a_breakdown():
     short_term = build_zone_report(features, ticker="test")["short_term"]
     assert short_term["action"] != "SUPPORT_BREAKDOWN"
     assert short_term["breakdown"]["active"] is False
+
+
+def test_high_rr_entry_gives_the_requested_reward_to_risk_capped_at_the_zone():
+    entry = high_rr_entry(80.0, 120.0, 200.0, 3.0)
+    assert (120 - entry) / (entry - 80) == pytest.approx(3.0)
+    assert high_rr_entry(80.0, 120.0, 85.0, 3.0) == 85.0
+
+
+def test_long_term_zone_replay_reports_any_day_baseline():
+    ohlc = adjusted_ohlcv(_features())
+    study = forward_return_study(ohlc, compute_zone_frame(ohlc), "buy")
+    assert 0 <= study["baseline_success_rate"] <= 1
+    assert study["edge_vs_baseline"] == pytest.approx(study["success_rate"] - study["baseline_success_rate"], abs=1e-3)
+
+
+def test_long_term_plan_study_scores_trades_in_r():
+    ohlc = adjusted_ohlcv(_features(sessions=2500))
+    study = long_term_plan_study(ohlc, compute_zone_frame(ohlc))
+    assert study["episodes"] >= 8
+    assert study["edge_r"] == pytest.approx(study["expectancy_r"] - study["baseline_expectancy_r"], abs=0.011)
+    for episode in study["recent_episodes"]:
+        assert episode["stop"] < episode["entry"] < episode["target"]
+        assert episode["planned_rr"] >= 3.0 - 1e-9
+        if episode["outcome"] == "success":
+            assert episode["r_multiple"] == pytest.approx(episode["planned_rr"])
+        elif episode["outcome"] == "failed":
+            assert episode["r_multiple"] <= -1 + 1e-9
+
+
+def _long_term_report(price_from_plan):
+    """Re-run the report with the last close moved to a price chosen from the original plan."""
+    features = _features(sessions=2500)
+    plan = build_zone_report(features, ticker="test")["long_term"]["trade_plan"]
+    moved = features.copy()
+    price = price_from_plan(plan)
+    for column in ("Open", "High", "Low", "Close", "Adj Close"):
+        moved.iloc[-1, moved.columns.get_loc(column)] = price
+    moved["close"] = moved["Adj Close"]
+    return build_zone_report(moved, ticker="test")["long_term"]
+
+
+def test_long_term_plan_fields_are_consistent():
+    long_term = build_zone_report(_features(sessions=2500), ticker="test")["long_term"]
+    plan = long_term["trade_plan"]
+    assert plan["stop"] < plan["entry"] <= long_term["buy_zone"]["high"]
+    assert plan["reward_risk_at_entry"] >= 3.0 - 0.01
+    assert set(long_term["history"]) == {"buy_zone", "sell_zone", "plan"}
+    if long_term["tone"] == "positive":
+        assert long_term["historical_edge"]["grade"] in {"EDGE", "SLIGHT_EDGE"}
+
+
+def test_price_at_the_3_to_1_entry_is_accumulate():
+    long_term = _long_term_report(lambda plan: (plan["stop"] + plan["entry"]) / 2)
+    assert long_term["action"] == "ACCUMULATE"
+    assert long_term["trade_plan"]["reward_risk_now"] >= 3.0
+
+
+def test_price_below_the_long_term_stop_invalidates_the_plan():
+    long_term = _long_term_report(lambda plan: plan["stop"] * 0.95)
+    assert long_term["action"] == "BELOW_LONG_TERM_STOP"
+    assert long_term["tone"] == "negative"
+    assert long_term["trade_plan"]["reward_risk_now"] is None

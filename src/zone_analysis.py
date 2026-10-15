@@ -16,6 +16,9 @@ from .entry_zones import (
     LONG_TERM_BUY_PCTL,
     LONG_TERM_HORIZON,
     LONG_TERM_LOOKBACK,
+    LONG_TERM_MIN_RR,
+    LONG_TERM_PLAN_HORIZON,
+    LONG_TERM_STOP_PCTL,
     LONG_TERM_SELL_PCTL,
     SHORT_TERM_BUY_PCTL,
     SHORT_TERM_HORIZON,
@@ -29,6 +32,8 @@ from .entry_zones import (
     compute_zone_frame,
     confirmation_study,
     forward_return_study,
+    high_rr_entry,
+    long_term_plan_study,
     position_in_zone,
     reversion_study,
     swing_levels,
@@ -56,8 +61,10 @@ SHORT_TERM_ACTIONS = {
 }
 
 LONG_TERM_ACTIONS = {
-    "ACCUMULATE": ("Accumulate", "positive", "Price is inside the long-term value zone relative to its 200-day average."),
-    "DEEP_VALUE_TREND_RISK": ("Below value zone", "caution", "Price is cheaper than the value zone; historically rare, but the long-term trend may be breaking. Scale in slowly."),
+    "ACCUMULATE": ("Accumulate", "positive", f"Price is at or below the long-term entry that offers at least {LONG_TERM_MIN_RR:g}:1 reward to risk (target: bottom of the trim zone; stop: the long-term stop)."),
+    "VALUE_ZONE_LOW_RR": ("In value zone, reward/risk under 3:1", "caution", "Price is inside the long-term value zone, but the stop is too far away for a 3:1 trade. Wait for the 3:1 entry or size the position for the wider stop."),
+    "DEEP_VALUE_TREND_RISK": ("Below value zone", "caution", "Price is cheaper than the value zone but still above the 3:1 entry; historically rare, and the long-term trend may be breaking. Scale in slowly."),
+    "BELOW_LONG_TERM_STOP": ("Below long-term stop", "negative", "Price is further below its 200-day average than on 98% of sessions in the last five years; the long-term plan is invalidated until price recovers above the stop."),
     "APPROACHING_VALUE": ("Approaching value zone", "caution", "Price is close to the long-term value zone."),
     "HOLD_WAIT": ("Hold / wait", "neutral", "Price is between the long-term value and trim zones."),
     "APPROACHING_TRIM": ("Approaching trim zone", "caution", "Price is close to the long-term trim zone; avoid adding."),
@@ -95,6 +102,23 @@ def _edge_grade(study: dict) -> dict:
     else:
         grade, label = "NO_EDGE", "No better than an average day"
     return {"grade": grade, "label": label, "edge_vs_baseline": edge, "success_rate": study.get("success_rate"), "baseline_success_rate": study.get("baseline_success_rate"), "episodes": study.get("episodes")}
+
+
+def _r_edge_grade(study: dict) -> dict:
+    """Grade the long-term plan by how many R per trade it beat entering on any day."""
+    edge = study.get("edge_r")
+    if not study.get("sufficient_sample") or edge is None:
+        grade, label = "THIN_SAMPLE", "Too few past 3:1 entries to judge"
+    elif edge >= 0.25:
+        grade, label = "EDGE", "3:1 entries beat buying on any day"
+    elif edge > 0:
+        grade, label = "SLIGHT_EDGE", "3:1 entries slightly beat buying on any day"
+    else:
+        grade, label = "NO_EDGE", "3:1 entries did no better than any day"
+    return {
+        "grade": grade, "label": label, "edge_r": edge, "expectancy_r": study.get("expectancy_r"),
+        "baseline_expectancy_r": study.get("baseline_expectancy_r"), "episodes": study.get("episodes"),
+    }
 
 
 def _trim_study(study: dict) -> dict:
@@ -292,10 +316,21 @@ def _long_term_view(ohlc: pd.DataFrame, zones: pd.DataFrame, swings: list[dict])
     )
     buy_study = forward_return_study(ohlc, zones, "buy")
     sell_study = forward_return_study(ohlc, zones, "sell")
+    plan_study = long_term_plan_study(ohlc, zones)
+    stop = float(last["next_lt_stop"])
+    entry = float(high_rr_entry(stop, sell_low, buy_high))
+
+    def reward_risk(price: float) -> float | None:
+        return clean_float((sell_low - price) / (price - stop), 2) if stop < price < sell_low else None
+
     if sell_zone["position"] in {"INSIDE", "ABOVE"}:
         action = "TRIM_ZONE"
-    elif buy_zone["position"] == "INSIDE":
+    elif close <= stop:
+        action = "BELOW_LONG_TERM_STOP"
+    elif close <= entry:
         action = "ACCUMULATE"
+    elif buy_zone["position"] == "INSIDE":
+        action = "VALUE_ZONE_LOW_RR"
     elif buy_zone["position"] == "BELOW":
         action = "DEEP_VALUE_TREND_RISK"
     elif buy_zone["position"] == "NEAR":
@@ -305,6 +340,10 @@ def _long_term_view(ohlc: pd.DataFrame, zones: pd.DataFrame, swings: list[dict])
     else:
         action = "HOLD_WAIT"
     label, tone, definition = LONG_TERM_ACTIONS[action]
+    edge = _r_edge_grade(plan_study)
+    # As in the short-term view, a plan this ticker's history does not reward is never a green light.
+    if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
+        tone = "caution"
     ma200 = zones["ma200"]
     view = {
         "available": True,
@@ -313,16 +352,34 @@ def _long_term_view(ohlc: pd.DataFrame, zones: pd.DataFrame, swings: list[dict])
         "action_label": label,
         "tone": tone,
         "action_definition": definition,
+        "historical_edge": edge,
         "buy_zone": buy_zone,
         "sell_zone": sell_zone,
+        "trade_plan": {
+            "entry": clean_float(entry, 2),
+            "entry_basis": f"highest price at or below the value-zone top that offers {LONG_TERM_MIN_RR:g}:1 to the target",
+            "distance_to_entry_pct": clean_float(close / entry - 1),
+            "stop": clean_float(stop, 2),
+            "stop_basis": (
+                f"200-day MA adjusted by the {LONG_TERM_STOP_PCTL:.0%} percentile distance over 5 years: deeper than "
+                f"{1 - LONG_TERM_STOP_PCTL:.0%} of sessions, so the long-term case is broken"
+            ),
+            "target": clean_float(sell_low, 2),
+            "target_basis": "bottom of the long-term trim zone",
+            "reward_risk_at_entry": reward_risk(entry),
+            "reward_risk_at_zone_top": reward_risk(buy_high),
+            "reward_risk_now": reward_risk(close),
+            "risk_to_stop_now_pct": clean_float(1 - stop / close) if close > stop else None,
+            "horizon_sessions": LONG_TERM_PLAN_HORIZON,
+        },
         "distance_from_ma200": {
             "current_pct": clean_float(close / float(last["ma200"]) - 1),
             "percentile": clean_float(percentile_rank(zones["lt_dev"], LONG_TERM_LOOKBACK)),
             "ma200_rising": bool(ma200.iloc[-1] > ma200.iloc[-21]),
         },
-        "history": {"buy_zone": _trim_study(buy_study), "sell_zone": _trim_study(sell_study)},
+        "history": {"buy_zone": _trim_study(buy_study), "sell_zone": _trim_study(sell_study), "plan": _trim_study(plan_study)},
     }
-    return view, buy_study, sell_study
+    return view, plan_study, sell_study
 
 
 def _chart_data(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataFrame, studies: dict[str, dict | None]) -> dict:
@@ -428,7 +485,7 @@ def build_zone_report(
         )
     swings = swing_levels(ohlc)
     short_term, st_buy_study, st_sell_study = _short_term_view(ohlc, features, zones, market_close, swings)
-    long_term, lt_buy_study, lt_sell_study = _long_term_view(ohlc, zones, swings)
+    long_term, lt_plan_study, lt_sell_study = _long_term_view(ohlc, zones, swings)
     latest = features.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     previous_close = float(ohlc["close"].iloc[-2])
@@ -469,7 +526,7 @@ def build_zone_report(
         "macro_context": build_macro_context(latest, benchmarks["treasury_yield"], benchmarks["oil"]),
         "chart_data": _chart_data(
             ohlc, features, zones,
-            {"st_buy": st_buy_study, "st_sell": st_sell_study, "lt_buy": lt_buy_study, "lt_sell": lt_sell_study},
+            {"st_buy": st_buy_study, "st_sell": st_sell_study, "lt_buy": lt_plan_study, "lt_sell": lt_sell_study},
         ),
         "methodology": {
             "summary": (

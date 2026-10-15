@@ -21,6 +21,8 @@ const VIEW_LABELS = {
   WAIT_FOR_PULLBACK: "Wait for pullback",
   TAKE_PROFIT_ZONE: "Take-profit zone",
   ACCUMULATE: "Accumulate",
+  VALUE_ZONE_LOW_RR: "In value zone, reward/risk under 3:1",
+  BELOW_LONG_TERM_STOP: "Below long-term stop",
   DEEP_VALUE_TREND_RISK: "Below value zone",
   APPROACHING_VALUE: "Approaching value zone",
   HOLD_WAIT: "Hold / wait",

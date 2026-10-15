@@ -37,9 +37,9 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 The React frontend shows:
 
 - **Short-term entry card**: action (`SUPPORT_BREAKDOWN`, `ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics (or, after a support breakdown, the historical continuation statistics)
-- **Long-term card**: action (`ACCUMULATE`, `DEEP_VALUE_TREND_RISK`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), value and trim zones, distance from the 200-day MA, and 60-session outcomes after earlier visits
+- **Long-term card**: action (`ACCUMULATE`, `VALUE_ZONE_LOW_RR`, `DEEP_VALUE_TREND_RISK`, `BELOW_LONG_TERM_STOP`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), the 3:1 entry, stop, target and current reward/risk, value and trim zones, distance from the 200-day MA, and the plan's replay against buying on any day
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
-- **Chart** (3M, 6M, 1Y daily; 3Y and 5Y weekly on a log scale): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome, and a stretch / RSI / MACD lower pane
+- **Chart** (3M, 6M, 1Y daily; 3Y and 5Y weekly on a log scale): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ short-term buy/take-profit, ◆ long-term 3:1 entry), and a stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
 - **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
 - **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
@@ -57,6 +57,18 @@ The headline uses the model only when it beat the base rate out of sample (Brier
 ### Reading the bounce statistics
 
 A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
+
+### Long-term 3:1 plan
+
+The long-term trade plan is built for reward/risk, not just for "cheap":
+
+- **Stop**: the price that would put the ticker further below its 200-day MA than on 98% of sessions in the last 5 years. Below it the long-term case is broken (`BELOW_LONG_TERM_STOP`).
+- **Target**: the bottom of the long-term trim zone (85th percentile distance above the 200-day MA).
+- **Entry**: the highest price at or below the value-zone top that offers at least 3:1 to the target. `ACCUMULATE` means price is at or below it; inside the value zone but above it is `VALUE_ZONE_LOW_RR`.
+
+The plan is replayed on every earlier fill (at least 20 sessions apart, levels fixed at entry, gaps through the stop exit at the open) and scored in **R**, the profit or loss as a multiple of the planned risk. Each trade ends at the target, the stop, or after 250 sessions. The baseline enters the same stop and target at every session's close, so the edge is what waiting for the 3:1 price was worth. `ACCUMULATE` is only shown as positive when the ticker's own plan beat that baseline. The 60-session value-zone replay also shows its any-day baseline now.
+
+When this was built, across 15 large tickers the plan averaged +0.82R per trade against +0.34R for the same stop and target bought on any day, and beat its baseline on 10 of 15 (losers: XLE, XLF, AMZN, MSFT, IWM). Win rates are low (14–49%), as expected for 3:1 trades, and a reward/risk at today's price can look very high when price sits just above the stop, so read it with the stop distance next to it. The stop, target and 3:1 threshold were chosen by comparing six variants on those same tickers, so treat the edge as optimistic.
 
 ### Support breakdowns
 
