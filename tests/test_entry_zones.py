@@ -127,7 +127,8 @@ def test_zone_report_shape_and_json_serializable():
     assert long_term["available"] is True
     assert len(short_term["bounce_readiness"]["checks"]) == short_term["bounce_readiness"]["max_score"]
     points = report["chart_data"]["points"]
-    assert len(points) == 252
+    assert len(points) == 1260
+    assert set(report["trend_outlook"]) == {"short_term", "long_term"}
     assert {"st_buy_low", "st_buy_high", "lt_sell_high", "stretch", "stretch_p05"} <= set(points[-1])
 
 

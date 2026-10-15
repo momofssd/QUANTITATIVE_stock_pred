@@ -1,4 +1,5 @@
 import { useState } from "react";
+import AiPanel from "./components/AiPanel";
 import MarketChart from "./components/MarketChart";
 import {
   EvidenceTables,
@@ -8,6 +9,7 @@ import {
   ReasonsPanel,
   ShortTermHero,
   TradePlanPanel,
+  TrendOutlook,
 } from "./components/ZonePanels";
 import { dollar, fixed, percent } from "./components/format";
 
@@ -27,101 +29,6 @@ function ZoneRow({ label, value }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
-  );
-}
-
-function BulletList({ items }) {
-  if (!Array.isArray(items) || !items.length) return null;
-  return (
-    <ul className="ai-list">
-      {items.map((item) => (
-        <li key={item}>{item}</li>
-      ))}
-    </ul>
-  );
-}
-
-function AiPanel({ interpretation, loading, error, disabled, onGenerate }) {
-  const shortPlan = interpretation?.short_term_plan;
-  const longPlan = interpretation?.long_term_plan;
-  return (
-    <section className="panel ai-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Gemini Interpreter</p>
-          <h2>AI explanation</h2>
-        </div>
-        <button disabled={loading || disabled} onClick={onGenerate} type="button">
-          {loading ? "Generating..." : interpretation ? "Refresh" : "Generate"}
-        </button>
-      </div>
-      {error && <div className="inline-error">{error}</div>}
-      {!interpretation && !loading && !error && (
-        <p className="summary">Optional. Sends the zone report (without chart rows) to Gemini for a plain-language explanation.</p>
-      )}
-      {loading && <p className="summary">Sending the zone report to the AI interpreter...</p>}
-      {interpretation && (
-        <div className="ai-content">
-          <div className="ai-summary">
-            <strong>
-              {interpretation.short_term_view?.replaceAll("_", " ")} · {interpretation.long_term_view?.replaceAll("_", " ")}
-            </strong>
-            <p>{interpretation.plain_english_summary}</p>
-          </div>
-          {shortPlan && (
-            <div className="ai-forecast">
-              <h3>Short-term plan</h3>
-              <div className="fact-grid">
-                <ZoneRow label="Entry zone" value={shortPlan.entry_zone} />
-                <ZoneRow label="Position" value={shortPlan.current_position} />
-                <ZoneRow label="Stop" value={shortPlan.stop_loss} />
-                <ZoneRow label="Targets" value={shortPlan.targets} />
-              </div>
-              <p className="summary">{shortPlan.bounce_assessment}</p>
-              <p className="summary">{shortPlan.historical_evidence}</p>
-              <div className="ai-columns">
-                <div>
-                  <h3>What confirms the bounce</h3>
-                  <BulletList items={shortPlan.what_confirms_bounce} />
-                </div>
-                <div>
-                  <h3>What invalidates it</h3>
-                  <BulletList items={shortPlan.what_invalidates_setup} />
-                </div>
-              </div>
-            </div>
-          )}
-          {longPlan && (
-            <div className="ai-assessment">
-              <h3>Long-term plan</h3>
-              <div className="fact-grid">
-                <ZoneRow label="Buy zone" value={longPlan.buy_zone} />
-                <ZoneRow label="Trim zone" value={longPlan.trim_zone} />
-              </div>
-              <p className="summary">
-                {longPlan.current_position} {longPlan.historical_evidence}
-              </p>
-            </div>
-          )}
-          <div className="ai-columns ai-assessment">
-            <div>
-              <h3>Reasons</h3>
-              <BulletList items={interpretation.key_reasons} />
-            </div>
-            <div>
-              <h3>Risks</h3>
-              <BulletList items={interpretation.main_risks} />
-            </div>
-          </div>
-          {interpretation.data_cited?.length > 0 && (
-            <details className="ai-data">
-              <summary>Data cited</summary>
-              <BulletList items={interpretation.data_cited} />
-            </details>
-          )}
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -284,6 +191,7 @@ export default function App() {
               <ShortTermHero market={report.current_market} shortTerm={shortTerm} />
               <LongTermCard longTerm={longTerm} />
             </section>
+            <TrendOutlook outlook={report.trend_outlook} ticker={report.ticker} />
 
             <div className="dashboard-layout">
               <div className="main-column">

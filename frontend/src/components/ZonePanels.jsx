@@ -394,3 +394,101 @@ export function EvidenceTables({ shortTerm, longTerm }) {
     </section>
   );
 }
+
+const FEATURE_LABELS = {
+  dist_ma200: "distance from the 200-day MA",
+  ma200_slope_20d: "200-day MA slope",
+  return_60d: "60-session return",
+  return_120d: "120-session return",
+};
+
+const DIRECTION_TONE = { BULLISH: "bullish", BEARISH: "bearish", NEUTRAL: "neutral" };
+const RELIABILITY_TONE = { USEFUL: "positive", WEAK: "caution", NO_SKILL: "negative", INSUFFICIENT_HISTORY: "neutral" };
+
+function TrendHorizon({ ticker, outlook, title }) {
+  if (!outlook?.available) {
+    return (
+      <div className="trend-horizon">
+        <p className="eyebrow">{title}</p>
+        <p className="panel-note">{outlook?.reason || "Trend outlook unavailable."}</p>
+      </div>
+    );
+  }
+  const test = outlook.walk_forward;
+  const fromModel = outlook.probability_source === "model";
+  const bullish = outlook.probability_bullish;
+  const callRate = (rate, count) => (count ? `${percent(rate, 0)} right (${count})` : "none made");
+  return (
+    <div className="trend-horizon">
+      <div className="hero-head">
+        <p className="eyebrow">
+          {title} · next {outlook.horizon_sessions} sessions
+        </p>
+        <span className={`chip ${RELIABILITY_TONE[outlook.reliability]}`}>Model: {outlook.reliability_label}</span>
+      </div>
+      <div className={`trend-call ${DIRECTION_TONE[outlook.direction]}`}>
+        <strong>{outlook.direction.toLowerCase()}</strong>
+        <span>{percent(bullish, 0)} chance of a higher close</span>
+      </div>
+      <div
+        aria-label={`${percent(bullish, 0)} bullish, ${percent(1 - bullish, 0)} bearish`}
+        className="probability-bar"
+        role="img"
+      >
+        <i className="bull" style={{ width: `${bullish * 100}%` }} />
+        <i className="bear" style={{ width: `${(1 - bullish) * 100}%` }} />
+        <b style={{ left: "50%" }} title="50%" />
+      </div>
+      <div className="probability-scale">
+        <span>Bullish {percent(bullish, 0)}</span>
+        <span>Bearish {percent(1 - bullish, 0)}</span>
+      </div>
+      <p className="summary trend-source">
+        {fromModel
+          ? `From the trend model, which beat ${ticker}'s base rate (${percent(outlook.base_rate_bullish, 0)}) in the walk-forward test.`
+          : `${ticker}'s base rate: it closed higher ${outlook.horizon_sessions} sessions later ${percent(outlook.base_rate_bullish, 0)} of the time. The trend model did not beat this out of sample, so its reading is shown only for reference.`}
+      </p>
+      <div className="trend-model">
+        <Row
+          detail={outlook.top_drivers
+            .slice(0, 2)
+            .map((driver) => `${FEATURE_LABELS[driver.feature] || driver.feature} → ${driver.pushes}`)
+            .join("; ")}
+          label="Trend model says"
+          value={`${outlook.model_direction.toLowerCase()} ${percent(outlook.model_probability_bullish, 0)}`}
+        />
+        <Row
+          detail={`${test.sessions_scored} sessions since ${test.start}; 0.50 = coin flip`}
+          label="Walk-forward AUC"
+          value={fixed(test.auc, 2)}
+        />
+        <Row
+          detail="vs. always quoting the base rate; below 0 = worse"
+          label="Brier skill"
+          value={signedPercent(test.brier_skill_score)}
+        />
+        <Row
+          label="Model's bullish / bearish calls"
+          value={`${callRate(test.bullish_call_hit_rate, test.bullish_calls)} / ${callRate(test.bearish_call_hit_rate, test.bearish_calls)}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function TrendOutlook({ ticker, outlook }) {
+  if (!outlook) return null;
+  return (
+    <section className="panel trend-panel">
+      <h2>Trend outlook</h2>
+      <p className="panel-note">
+        Probability of a higher close at each horizon. The headline uses the trend model only when it beat the ticker's own base
+        rate in a walk-forward test (trained on the past, scored on the following period); otherwise it reports the base rate.
+      </p>
+      <div className="trend-grid">
+        <TrendHorizon outlook={outlook.short_term} ticker={ticker} title="Short-term trend" />
+        <TrendHorizon outlook={outlook.long_term} ticker={ticker} title="Long-term trend" />
+      </div>
+    </section>
+  );
+}

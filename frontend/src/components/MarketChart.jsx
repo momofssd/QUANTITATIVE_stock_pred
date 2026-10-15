@@ -16,7 +16,11 @@ const RANGES = [
   { sessions: 63, label: "3M" },
   { sessions: 126, label: "6M" },
   { sessions: 252, label: "1Y" },
+  { sessions: 756, label: "3Y" },
+  { sessions: 1260, label: "5Y" },
 ];
+// Beyond one year, daily candles get thinner than a pixel, so the chart switches to weekly bars.
+const WEEKLY_AFTER = 252;
 
 const ZONES = [
   { key: "st_buy", label: "ST buy", kind: "buy", term: "short" },
@@ -42,13 +46,44 @@ function compactVolume(number) {
   return number.toFixed(0);
 }
 
-function formatDateTick(dateString, includeYear) {
+function formatDateTick(dateString, includeYear, monthOnly = false) {
   const [year, month, day] = dateString.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
     month: "short",
-    day: "numeric",
+    ...(monthOnly ? {} : { day: "numeric" }),
     ...(includeYear ? { year: "numeric" } : {}),
     timeZone: "UTC",
+  });
+}
+
+function weekStart(dateString) {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
+// One bar per calendar week: OHLC and volume aggregate, indicators and zones take the week's last session.
+function toWeekly(points) {
+  const buckets = [];
+  points.forEach((point) => {
+    const key = weekStart(point.date);
+    if (!buckets.length || buckets[buckets.length - 1].key !== key) buckets.push({ key, rows: [] });
+    buckets[buckets.length - 1].rows.push(point);
+  });
+  return buckets.map(({ rows }) => {
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    const highs = rows.map((row) => row.high).filter(valid);
+    const lows = rows.map((row) => row.low).filter(valid);
+    return {
+      ...last,
+      date: first.date,
+      sessionDates: rows.map((row) => row.date),
+      open: first.open,
+      high: highs.length ? Math.max(...highs) : last.close,
+      low: lows.length ? Math.min(...lows) : last.close,
+      volume: rows.reduce((total, row) => total + (row.volume || 0), 0),
+    };
   });
 }
 
@@ -122,14 +157,23 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const [activeIndex, setActiveIndex] = useState(null);
   const points = chart?.points || [];
 
-  const visiblePoints = useMemo(() => points.slice(-range).filter((point) => valid(point.close)), [points, range]);
+  const weekly = range > WEEKLY_AFTER;
+  const visiblePoints = useMemo(() => {
+    const daily = points.slice(-range).filter((point) => valid(point.close));
+    return weekly ? toWeekly(daily) : daily;
+  }, [points, range, weekly]);
+  // Touches are keyed by the bar they fall in, so weekly bars show the week's first touch per zone.
   const touchesByDate = useMemo(() => {
+    const barDate = new Map();
+    visiblePoints.forEach((point) => (point.sessionDates || [point.date]).forEach((date) => barDate.set(date, point.date)));
     const map = new Map();
     (chart?.zone_touches || []).forEach((touch) => {
-      if (touch.zone.startsWith("st_")) map.set(`${touch.date}:${touch.zone}`, touch);
+      const bar = barDate.get(touch.date);
+      const key = `${bar}:${touch.zone}`;
+      if (bar && touch.zone.startsWith("st_") && !map.has(key)) map.set(key, touch);
     });
     return map;
-  }, [chart]);
+  }, [chart, visiblePoints]);
 
   if (!visiblePoints.length) {
     return <div className="empty-chart">Chart history is unavailable for this ticker.</div>;
@@ -160,12 +204,15 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const minPrice = Math.min(...priceValues);
   const maxPrice = Math.max(...priceValues);
   const pricePad = Math.max((maxPrice - minPrice) * 0.05, maxPrice * 0.004);
-  const priceLow = minPrice - pricePad;
+  const priceLow = Math.max(minPrice - pricePad, minPrice * 0.9);
   const priceHigh = maxPrice + pricePad;
-  const priceRange = Math.max(priceHigh - priceLow, 0.01);
-  const priceY = (price) => TOP + ((priceHigh - price) / priceRange) * PRICE_HEIGHT;
+  // Multi-year ranges use a log scale so equal percentage moves take equal height.
+  const toScale = weekly ? (price) => Math.log(Math.max(price, priceLow * 0.5)) : (price) => price;
+  const fromScale = weekly ? Math.exp : (value) => value;
+  const scaleRange = Math.max(toScale(priceHigh) - toScale(priceLow), 1e-6);
+  const priceY = (price) => TOP + ((toScale(priceHigh) - toScale(price)) / scaleRange) * PRICE_HEIGHT;
   const maximumVolume = Math.max(...visiblePoints.map((point) => point.volume || 0), 1);
-  const gridPrices = Array.from({ length: 5 }, (_, index) => priceHigh - (priceRange * index) / 4);
+  const gridPrices = Array.from({ length: 5 }, (_, index) => fromScale(toScale(priceHigh) - (scaleRange * index) / 4));
 
   const zoneLabels = spreadLabels(
     [
@@ -237,9 +284,10 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
           </p>
         </div>
         <div className="toolbar-controls">
-          {RANGES.map((option) => (
+          {RANGES.map((option, index) => (
             <button
               className={range === option.sessions ? "selected" : ""}
+              disabled={index > 0 && points.length <= RANGES[index - 1].sessions}
               key={option.sessions}
               onClick={() => setRange(option.sessions)}
               type="button"
@@ -279,22 +327,25 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         <span className="legend-item ma20">EMA20</span>
         <span className="legend-item ma50">MA50</span>
         <span className="legend-item ma200">MA200</span>
-        <span className="quote-detail">{hovered.date}</span>
-        <span>O {money(hovered.open)}</span>
-        <span>H {money(hovered.high)}</span>
-        <span>L {money(hovered.low)}</span>
-        <span>C {money(hovered.close)}</span>
-        <span>Vol {compactVolume(hovered.volume)}</span>
-        {valid(hovered.st_buy_low) && (
-          <span>
-            Buy zone {money(hovered.st_buy_low)}–{money(hovered.st_buy_high)}
-          </span>
-        )}
-        {hoveredTouches.map((touch) => (
-          <span className={`touch-note ${touch.zone}`} key={touch.zone}>
-            {touch.zone === "st_buy" ? "Buy-zone touch" : "Sell-zone touch"}: {outcomeText(touch.zone, touch.outcome)}
-          </span>
-        ))}
+      </div>
+      {/* Fixed-height readout with fixed-width fields, so hovering never reflows the chart. */}
+      <div className="chart-readout">
+        <span className="readout-date">{weekly ? `Week of ${hovered.date}` : hovered.date}</span>
+        <span className="readout-field">O {money(hovered.open)}</span>
+        <span className="readout-field">H {money(hovered.high)}</span>
+        <span className="readout-field">L {money(hovered.low)}</span>
+        <span className="readout-field">C {money(hovered.close)}</span>
+        <span className="readout-field">Vol {compactVolume(hovered.volume)}</span>
+        <span className="readout-zone">
+          {valid(hovered.st_buy_low) ? `Buy zone ${money(hovered.st_buy_low)}–${money(hovered.st_buy_high)}` : ""}
+        </span>
+        <span className="readout-touch">
+          {hoveredTouches.map((touch) => (
+            <span className={`touch-note ${touch.zone}`} key={touch.zone}>
+              {touch.zone === "st_buy" ? "Buy-zone touch" : "Sell-zone touch"}: {outcomeText(touch.zone, touch.outcome)}
+            </span>
+          ))}
+        </span>
       </div>
       <svg
         aria-label="Daily candlestick chart with short-term and long-term buy and sell zones"
@@ -327,6 +378,11 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         <text className="pane-label" textAnchor="end" x={plotRight - 4} y={TOP + PRICE_HEIGHT - 6}>
           Next session
         </text>
+        {weekly && (
+          <text className="pane-label" x={LEFT + 4} y={TOP + 12}>
+            Weekly bars · log scale
+          </text>
+        )}
         {shownZones.map((zone) => {
           const next = nextZones[zone.key];
           return (
@@ -381,7 +437,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
                 <Triangle
                   className={`touch-marker ${buy ? "buy" : "sell"} ${touch.outcome}`}
                   key={`${zone}-${point.date}`}
-                  title={`${point.date} ${buy ? "buy" : "sell"}-zone touch at ${money(touch.entry)}: ${outcomeText(touch.zone, touch.outcome)}`}
+                  title={`${touch.date} ${buy ? "buy" : "sell"}-zone touch at ${money(touch.entry)}: ${outcomeText(touch.zone, touch.outcome)}`}
                   up={buy}
                   x={xAt(index)}
                   y={y}
@@ -458,12 +514,12 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         <line className="date-axis-line" x1={LEFT} x2={plotRight} y1={DATE_AXIS_Y} y2={DATE_AXIS_Y} />
         {dateTickIndexes.map((index) => {
           const point = visiblePoints[index];
-          const includeYear = index === 0 || point.date.slice(0, 4) !== firstVisibleYear;
+          const includeYear = weekly || index === 0 || point.date.slice(0, 4) !== firstVisibleYear;
           return (
             <g className="date-tick" key={`date-${point.date}`}>
               <line x1={xAt(index)} x2={xAt(index)} y1={DATE_AXIS_Y} y2={DATE_AXIS_Y + 7} />
               <text className="axis-label date" x={xAt(index)} y={DATE_AXIS_Y + 23}>
-                {formatDateTick(point.date, includeYear)}
+                {formatDateTick(point.date, includeYear, weekly)}
               </text>
             </g>
           );

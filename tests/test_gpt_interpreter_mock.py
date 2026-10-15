@@ -6,23 +6,12 @@ def test_gemini_interpreter_mock(monkeypatch):
         "ticker": "TSLA",
         "short_term_view": "APPROACHING_ENTRY",
         "long_term_view": "HOLD_WAIT",
-        "plain_english_summary": "Price is about one ATR above the short-term buy zone.",
-        "short_term_plan": {
-            "entry_zone": "180.10-184.60",
-            "current_position": "NEAR, 1.9% above the zone",
-            "bounce_assessment": "No washout yet; RSI(14) is 44.",
-            "stop_loss": "177.80",
-            "targets": "191.40, then 198.20",
-            "historical_evidence": "58% of 61 touches bounced versus a 49% any-day baseline.",
-            "what_confirms_bounce": ["Close above the prior session high after touching the zone"],
-            "what_invalidates_setup": ["Close below the stop"],
-        },
-        "long_term_plan": {
-            "buy_zone": "150.00-171.00",
-            "trim_zone": "240.00-262.00",
-            "current_position": "Between zones",
-            "historical_evidence": "Value-zone visits were higher 60 sessions later 64% of the time.",
-        },
+        "headline": "TSLA is about one ATR above its short-term buy zone.",
+        "summary_markdown": "- Price is **1.9% above** the buy zone.",
+        "short_term_markdown": "#### Where price is\nNear the zone.",
+        "historical_replay_markdown": "| Setup | Worked |\n|---|---|\n| Buy at first touch | 58% |",
+        "trend_outlook_markdown": "- 10 sessions: 61% bullish (base rate).",
+        "long_term_markdown": "Between the value and trim zones.",
         "key_reasons": ["Buy zone has beaten the baseline"],
         "main_risks": ["Price is below its 200-day average"],
         "data_cited": ["RSI(14) 44.0", "ATR 4.52"],
@@ -36,3 +25,24 @@ def test_gemini_interpreter_mock(monkeypatch):
 def test_interpreter_prompt_omits_chart_rows():
     report = {"ticker": "TSLA", "chart_data": {"points": [{"close": 1}]}, "short_term": {}}
     assert gpt_interpreter._without_chart(report) == {"ticker": "TSLA", "short_term": {}}
+
+
+def test_env_file_key_and_model_win_over_process_environment(monkeypatch):
+    file_key = "AIza" + "f" * 35
+    monkeypatch.setattr(gpt_interpreter, "read_env_file", lambda: {"gemini": file_key, "GEMINI_MODEL": "gemini-4-argon"})
+    monkeypatch.setenv("GEMINI_API_KEY", "stale-terminal-key-000000000000000")
+    monkeypatch.setenv("GEMINI_MODEL", "some-other-model")
+    assert gpt_interpreter._api_key_with_source() == (file_key, ".env gemini")
+    assert gpt_interpreter._model_name(None) == "gemini-4-argon"
+
+
+def test_process_environment_key_used_when_env_file_has_none(monkeypatch):
+    monkeypatch.setattr(gpt_interpreter, "read_env_file", lambda: {})
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza" + "e" * 35)
+    assert gpt_interpreter._api_key_with_source()[1] == "environment GEMINI_API_KEY"
+
+
+def test_schema_requires_every_markdown_section():
+    required = set(gpt_interpreter.INTERPRETATION_SCHEMA["required"])
+    assert set(gpt_interpreter.MARKDOWN_SECTIONS) <= required
+    assert set(required) == set(gpt_interpreter.INTERPRETATION_SCHEMA["properties"])

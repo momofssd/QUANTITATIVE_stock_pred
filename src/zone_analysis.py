@@ -35,10 +35,11 @@ from .entry_zones import (
 )
 from .features import build_features
 from .json_exporter import build_macro_context
+from .trend_probability import TREND_HORIZONS, trend_outlook
 from .utils import clean_float
 
 
-CHART_PERIODS = 252
+CHART_PERIODS = 1260
 
 SHORT_TERM_ACTIONS = {
     "ENTRY_CONFIRMED": ("Entry confirmed", "positive", "Price tagged the buy zone and has reclaimed the prior session's high; the bounce has started."),
@@ -422,6 +423,7 @@ def build_zone_report(
         },
         "short_term": short_term,
         "long_term": long_term,
+        "trend_outlook": {key: trend_outlook(ohlc, zones, features, horizon) for key, horizon in TREND_HORIZONS.items()},
         "technical_indicators": {
             "ema20": clean_float(last["ema20"], 2),
             "ma50": clean_float(last["ma50"], 2),

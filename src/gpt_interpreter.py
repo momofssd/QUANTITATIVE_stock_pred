@@ -3,13 +3,23 @@ from __future__ import annotations
 import json
 import os
 
-from .utils import PROJECT_ROOT, load_env_file
+from .utils import PROJECT_ROOT, read_env_file
 
 
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_MODEL = "gemini-4-argon"
 
 
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
+_MARKDOWN = {"type": "string"}
+
+# Prose sections are markdown; the dashboard renders each one under its own heading.
+MARKDOWN_SECTIONS = (
+    "summary_markdown",
+    "short_term_markdown",
+    "historical_replay_markdown",
+    "trend_outlook_markdown",
+    "long_term_markdown",
+)
 
 INTERPRETATION_SCHEMA = {
     "type": "object",
@@ -17,40 +27,8 @@ INTERPRETATION_SCHEMA = {
         "ticker": {"type": "string"},
         "short_term_view": {"type": "string"},
         "long_term_view": {"type": "string"},
-        "plain_english_summary": {"type": "string"},
-        "short_term_plan": {
-            "type": "object",
-            "properties": {
-                "entry_zone": {"type": "string"},
-                "current_position": {"type": "string"},
-                "bounce_assessment": {"type": "string"},
-                "stop_loss": {"type": "string"},
-                "targets": {"type": "string"},
-                "historical_evidence": {"type": "string"},
-                "what_confirms_bounce": _STRING_LIST,
-                "what_invalidates_setup": _STRING_LIST,
-            },
-            "required": [
-                "entry_zone",
-                "current_position",
-                "bounce_assessment",
-                "stop_loss",
-                "targets",
-                "historical_evidence",
-                "what_confirms_bounce",
-                "what_invalidates_setup",
-            ],
-        },
-        "long_term_plan": {
-            "type": "object",
-            "properties": {
-                "buy_zone": {"type": "string"},
-                "trim_zone": {"type": "string"},
-                "current_position": {"type": "string"},
-                "historical_evidence": {"type": "string"},
-            },
-            "required": ["buy_zone", "trim_zone", "current_position", "historical_evidence"],
-        },
+        "headline": {"type": "string"},
+        **{section: _MARKDOWN for section in MARKDOWN_SECTIONS},
         "key_reasons": _STRING_LIST,
         "main_risks": _STRING_LIST,
         "data_cited": _STRING_LIST,
@@ -60,9 +38,19 @@ INTERPRETATION_SCHEMA = {
         "ticker",
         "short_term_view",
         "long_term_view",
-        "plain_english_summary",
-        "short_term_plan",
-        "long_term_plan",
+        "headline",
+        *MARKDOWN_SECTIONS,
+        "key_reasons",
+        "main_risks",
+        "data_cited",
+        "not_financial_advice",
+    ],
+    "propertyOrdering": [
+        "ticker",
+        "short_term_view",
+        "long_term_view",
+        "headline",
+        *MARKDOWN_SECTIONS,
         "key_reasons",
         "main_risks",
         "data_cited",
@@ -71,17 +59,31 @@ INTERPRETATION_SCHEMA = {
 }
 
 
-def _api_key() -> str | None:
-    load_env_file()
-    candidates = [
-        os.getenv("GEMINI_API_KEY"),
-        os.getenv("gemini"),
-        os.getenv("GOOGLE_API_KEY"),
-    ]
-    for candidate in candidates:
+KEY_NAMES = ("GEMINI_API_KEY", "gemini", "GOOGLE_API_KEY")
+
+
+def _api_key_with_source() -> tuple[str | None, str | None]:
+    """Return the Gemini key and where it came from.
+
+    Values in .env win over the process environment, so a stale key exported
+    in a terminal cannot silently replace the project's key.
+    """
+    file_values = {key.lower(): value for key, value in read_env_file().items()}
+    sources = [(f".env {name}", file_values.get(name.lower())) for name in KEY_NAMES]
+    sources += [(f"environment {name}", os.environ.get(name)) for name in KEY_NAMES]
+    for source, candidate in sources:
         if candidate and len(candidate.strip()) >= 20:
-            return candidate.strip()
-    return None
+            return candidate.strip(), source
+    return None, None
+
+
+def _api_key() -> str | None:
+    return _api_key_with_source()[0]
+
+
+def _model_name(model: str | None) -> str:
+    file_values = {key.lower(): value for key, value in read_env_file().items()}
+    return model or file_values.get("gemini_model") or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
 
 
 def _skill_instructions() -> str:
@@ -100,13 +102,13 @@ def interpret_signal_with_gemini(signal_json: dict, model: str | None = None) ->
     """
     Sends the price-zone report to Gemini and returns structured JSON.
 
-    The default model uses Gemini 3.8 Flash. Override with GEMINI_MODEL
+    The default model is Gemini 4 Argon. Override with GEMINI_MODEL
     or --gemini-model if your account exposes a different model identifier.
     """
-    key = _api_key()
+    key, key_source = _api_key_with_source()
     if not key:
         raise RuntimeError("Missing Gemini API key. Set GEMINI_API_KEY, GOOGLE_API_KEY, or gemini in .env.")
-    model_name = model or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
+    model_name = _model_name(model)
 
     try:
         from google import genai
@@ -116,26 +118,30 @@ def interpret_signal_with_gemini(signal_json: dict, model: str | None = None) ->
 
     skill_instructions = _skill_instructions()
     prompt = (
-        "Use these local skill instructions as the interpretation policy:\n\n"
+        "You are writing the AI explanation panel of a stock dashboard. Follow this interpretation and "
+        "formatting guide exactly:\n\n"
         f"{skill_instructions}\n\n"
-        "Interpret this price-zone report for a short-term swing trader and a long-term investor. "
-        "The report is not a forecast: explain where price sits relative to the supplied zones and what the "
-        "historical replays show, always comparing success_rate with baseline_success_rate. "
-        "Keep the report's action codes as the short_term_view and long_term_view. "
-        "Copy zones, stop, and targets exactly as supplied; do not invent price levels or probabilities. "
-        "In data_cited, list the concrete values you relied on. "
-        "Return JSON only using the requested schema. This is not financial advice.\n\n"
+        "Return JSON only, using the requested schema. Every *_markdown field is GitHub-flavored markdown "
+        "and must follow the section template in the guide. This is not financial advice.\n\n"
+        "Price-zone report JSON:\n"
         f"{json.dumps(_without_chart(signal_json), indent=2)}"
     )
+
+    from google.genai import errors
+
     client = genai.Client(api_key=key)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=INTERPRETATION_SCHEMA,
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=INTERPRETATION_SCHEMA,
+            ),
+        )
+    except errors.APIError as exc:
+        # Name the key's source (never the key) so a wrong key is easy to trace.
+        raise RuntimeError(f"Gemini request failed using the key from {key_source} with model {model_name}: {exc.message or exc}") from exc
     text = getattr(response, "text", None)
     if not text:
         raise RuntimeError("Gemini returned an empty response.")

@@ -7,7 +7,7 @@ Python and React app that shows **where to buy and where to sell** a stock or ET
 - **Long-term value zone**: the 200-day MA adjusted by the ticker's 5th-25th percentile distance from it over the last 5 years.
 - **Long-term trim zone**: the same distance at the 85th-97th percentile.
 
-For each zone the dashboard tells you whether the current price is inside, near, below, or away from it, and how far it would have to move. No model is trained, so an analysis takes about a second.
+For each zone the dashboard tells you whether the current price is inside, near, below, or away from it, and how far it would have to move. Zones are not forecasts; the only forecast is the trend outlook described below. An analysis takes a few seconds.
 
 This is decision support, not financial advice.
 
@@ -25,12 +25,12 @@ The app reads `.env`. Supported Gemini key names:
 GEMINI_API_KEY=...
 GOOGLE_API_KEY=...
 gemini=...
-GEMINI_MODEL=gemini-3.8-flash
+GEMINI_MODEL=gemini-4-argon
 ```
 
 Key lookup prefers `GEMINI_API_KEY`, then `gemini`, then `GOOGLE_API_KEY`, and ignores invalid-looking very short values.
 
-The default Gemini model is `gemini-3.8-flash`. You can set `GEMINI_MODEL` or pass `--gemini-model` to override it.
+The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass `--gemini-model` to override it.
 
 ## Web Dashboard
 
@@ -38,11 +38,21 @@ The React frontend shows:
 
 - **Short-term entry card**: action (`ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics
 - **Long-term card**: action (`ACCUMULATE`, `DEEP_VALUE_TREND_RISK`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), value and trim zones, distance from the 200-day MA, and 60-session outcomes after earlier visits
-- **Chart**: adjusted daily candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome, and a stretch / RSI / MACD lower pane
+- **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
+- **Chart** (3M, 6M, 1Y daily; 3Y and 5Y weekly on a log scale): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome, and a stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
 - **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
 - **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
 - **Historical replay tables**, technical and macro context, and an optional Gemini explanation
+
+### Trend outlook
+
+The trend panel gives the probability of a higher close 10 and 60 sessions ahead. Two forecasters compete:
+
+- the ticker's **base rate**: how often it closed higher over that horizon in its own history
+- a **logistic regression** on distance from the 200-day MA, its slope, and 60/120-session returns, tested walk-forward (re-fit every 63 sessions on data whose outcomes were already known, then scored on the next block)
+
+The headline uses the model only when it beat the base rate out of sample (Brier skill score of at least 2% and AUC of at least 0.56). Otherwise the headline is the base rate, and the model's reading is shown for reference with its test record. When this was built, neither this model nor larger feature sets beat the base rate on SPY, QQQ, SMH, NVDA, AAPL, XLE, TLT or GLD at either horizon, so expect the base rate to be the usual headline.
 
 ### Reading the bounce statistics
 
@@ -97,7 +107,7 @@ Example `/analyze` input:
 }
 ```
 
-The response (`schema_version` 3.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `long_term`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py) and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
+The response (`schema_version` 3.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `long_term`, `trend_outlook`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py), the trend outlook in [src/trend_probability.py](src/trend_probability.py), and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
 
 ## Render Deployment
 

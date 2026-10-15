@@ -630,7 +630,8 @@ h1 {
 
 .zone-row strong {
   color: var(--text);
-  flex-shrink: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 600;
   margin-left: auto;
@@ -843,6 +844,11 @@ h1 {
   padding: 0 12px;
 }
 
+.toolbar-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .toolbar-controls button.selected {
   background: var(--green-soft);
   border-color: #73a184;
@@ -932,12 +938,46 @@ h1 {
   background: var(--ma200);
 }
 
-.quote-detail {
-  border-left: 1px solid var(--border);
+.chart-readout {
+  align-items: center;
+  border-bottom: 1px solid #edf0ed;
+  color: #51625a;
+  display: flex;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 14px;
+  height: 32px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chart-readout > span {
+  flex-shrink: 0;
+}
+
+.readout-date {
   color: var(--text);
   font-weight: 700;
-  margin-left: 8px;
-  padding-left: 15px;
+  width: 132px;
+}
+
+.readout-field {
+  width: 86px;
+}
+
+.readout-zone {
+  width: 210px;
+}
+
+.chart-readout > .readout-touch {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.readout-touch .touch-note + .touch-note {
+  margin-left: 12px;
 }
 
 .touch-note {
@@ -1236,27 +1276,48 @@ h1 {
   color: #8e3232;
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   padding: 12px 14px;
+}
+
+.ai-content {
+  min-width: 0;
 }
 
 .ai-summary {
   border-left: 4px solid var(--green);
-  margin-bottom: 18px;
+  margin-bottom: 6px;
   padding-left: 14px;
 }
 
-.ai-summary strong {
-  color: var(--text);
-  display: block;
-  font-size: 18px;
-  margin-bottom: 5px;
+.ai-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-bottom: 6px;
 }
 
-.ai-summary p {
-  color: #37473f;
-  font-size: 14px;
-  line-height: 1.55;
+.ai-views span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-views strong {
+  color: var(--text);
+}
+
+.ai-headline {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.45;
   margin: 0;
+}
+
+.ai-section {
+  border-top: 1px solid #e3e8e4;
+  margin-top: 18px;
+  padding-top: 4px;
 }
 
 .ai-columns {
@@ -1268,7 +1329,7 @@ h1 {
 .ai-list {
   color: #37473f;
   font-size: 13px;
-  line-height: 1.48;
+  line-height: 1.5;
   margin: 0;
   padding-left: 18px;
 }
@@ -1277,12 +1338,9 @@ h1 {
   margin-top: 6px;
 }
 
-.ai-forecast,
-.ai-assessment,
 .ai-data {
   border-top: 1px solid #e3e8e4;
   margin-top: 18px;
-  padding-top: 6px;
 }
 
 .ai-data summary {
@@ -1290,7 +1348,77 @@ h1 {
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  margin: 10px 0 14px;
+  margin: 12px 0;
+}
+
+/* Rendered markdown from the AI interpreter */
+
+.markdown {
+  color: #2f3f37;
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 920px;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown p {
+  margin: 0 0 10px;
+}
+
+.markdown h4 {
+  color: var(--text);
+  font-size: 14px;
+  margin: 16px 0 6px;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.markdown li + li {
+  margin-top: 4px;
+}
+
+.markdown strong {
+  color: var(--text);
+}
+
+.markdown code {
+  background: #f1f4f2;
+  border-radius: 3px;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  margin: 6px 0 12px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown th,
+.markdown td {
+  border-bottom: 1px solid #ebeeec;
+  padding: 7px 12px 7px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 /* Methodology */
@@ -1324,4 +1452,99 @@ h1 {
   font-size: 12px;
   line-height: 1.45;
   margin: 0;
+}
+
+/* Trend outlook */
+
+.trend-panel {
+  margin-bottom: 22px;
+}
+
+.trend-grid {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 6px;
+}
+
+.trend-horizon + .trend-horizon {
+  border-left: 1px solid var(--border);
+  padding-left: 28px;
+}
+
+.trend-call {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  margin: 4px 0 10px;
+}
+
+.trend-call strong {
+  font-size: 27px;
+  text-transform: capitalize;
+}
+
+.trend-call span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.trend-call.bullish strong {
+  color: var(--up);
+}
+
+.trend-call.bearish strong {
+  color: var(--down);
+}
+
+.trend-call.neutral strong {
+  color: var(--neutral);
+}
+
+.probability-bar {
+  border-radius: 4px;
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.probability-bar i {
+  display: block;
+  height: 100%;
+}
+
+.probability-bar .bull {
+  background: var(--zone-buy);
+  opacity: 0.75;
+}
+
+.probability-bar .bear {
+  background: repeating-linear-gradient(135deg, var(--zone-sell) 0 3px, #f3d4c4 3px 6px);
+}
+
+.probability-bar b {
+  background: var(--surface);
+  height: 100%;
+  position: absolute;
+  top: 0;
+  width: 2px;
+}
+
+.probability-scale {
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin: 5px 0 10px;
+}
+
+.trend-source {
+  font-size: 13px;
+}
+
+.trend-model {
+  border-top: 1px solid #ebefec;
+  margin-top: 8px;
 }
