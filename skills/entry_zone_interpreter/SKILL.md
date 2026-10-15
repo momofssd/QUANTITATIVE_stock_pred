@@ -12,7 +12,7 @@ The zones are not forecasts. They show where price sits relative to levels calib
 The JSON (`schema_version` 3.x, `analysis_type: price_zones`) contains:
 
 - `current_market`: price, daily change, trend label
-- `short_term`: action, buy zone, sell zone, stretch, bounce checklist (`bounce_readiness`), trade plan, historical replays (`history.buy_zone`, `history.confirmed_entry`, `history.sell_zone`), `historical_edge`, reasons, risks
+- `short_term`: action, buy zone, sell zone, stretch, bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.confirmed_entry`, `history.sell_zone`, `history.breakdown`), `historical_edge`, reasons, risks
 - `long_term`: action, value zone, trim zone, distance from the 200-day MA, historical replays (`history.buy_zone`, `history.sell_zone`)
 - `trend_outlook.short_term` / `trend_outlook.long_term`: probability of a higher close in 10 / 60 sessions
 - `technical_indicators`, `macro_context`, `data_quality`
@@ -28,6 +28,12 @@ The JSON (`schema_version` 3.x, `analysis_type: price_zones`) contains:
 - Six checks; `score` is how many passed. Name the checks that passed and the ones still missing, in plain words.
 - Stage meanings: `CONFIRMED` = touched the zone and closed above the prior high; `FORMING` = touched the zone and printed a reversal candle; `WASHOUT_NO_REVERSAL_YET` = oversold and stretched but no turn yet; `NOT_SET_UP` = no bounce conditions. Never print the code; use the meaning.
 
+### Support breakdown
+- `breakdown.status`: `ACTIVE` = within the last 5 sessions price closed below its most recent confirmed swing low and is still below it; `RECLAIMED` = it broke but has closed back above; `NONE` = no recent break.
+- When the action is the support breakdown, lead with it: name the broken level (`broken_level`), how far below it price is, the `follow_through_target`, and the `next_support` below. The bounce checklist is secondary; do not present the buy zone as an entry.
+- In this case `historical_edge` grades continuation, not a bounce: an `EDGE` grade means past breakdowns kept falling more often than an arbitrary day, which is bad news for buyers. Quote `history.breakdown.reclaim_rate` as the share of past breakdowns that failed (closed back above the level).
+- The trade plan's entry is a close back above the broken level (a failed breakdown), never the current price.
+
 ### Historical replay (explain this carefully; it is the core evidence)
 The replay re-runs every earlier visit to a zone, using only data available at the time.
 
@@ -35,6 +41,7 @@ The replay re-runs every earlier visit to a zone, using only data available at t
 - `buy_zone`: buy on the first touch of the buy zone. Worked = price rose 1.5 ATR before falling 1.5 ATR.
 - `confirmed_entry`: wait for a close above the prior session's high within 3 sessions of a touch, then buy. Same bracket.
 - `sell_zone`: on the first touch of the take-profit zone, worked = price fell 1.5 ATR before rising 1.5 ATR. This tests whether taking profit there was right.
+- `breakdown`: from the first close below swing-low support, worked = price fell another 1.5 ATR before rising 1.5 ATR. This tests whether breakdowns kept falling. `reclaim_rate` is how often price closed back above the broken level within 10 sessions.
 
 How to read a short-term row, in this order:
 1. **Sample size** (`episodes`). Under 30 is thin; say so.
@@ -97,6 +104,7 @@ One or two sentences: price vs. the buy zone and take-profit zone, with distance
 #### What invalidates the setup
 - …
 ```
+When the action is the support breakdown, replace "Bounce checklist" with "Breakdown" (broken level, distance below it, follow-through target, next support, past continuation and reclaim rates), and "What confirms the bounce" with "What would reclaim the level".
 
 **`historical_replay_markdown`**:
 ```
@@ -107,6 +115,7 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 | Buy at first touch | … | …% | …% | ± … pts |
 | Wait for reversal close | … | …% | …% | ± … pts |
 | Take profit at first touch | … | …% | …% | ± … pts |
+| Close below swing-low support (kept falling) | … | …% | …% | ± … pts |
 | Long-term value zone (60 sessions) | … | …% | — | median return …% |
 | Long-term trim zone (60 sessions) | … | …% | — | median return …% |
 

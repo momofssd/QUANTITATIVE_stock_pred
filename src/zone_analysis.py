@@ -24,6 +24,8 @@ from .entry_zones import (
     ZONE_KEYS,
     adjusted_ohlcv,
     bounce_readiness,
+    breakdown_state,
+    breakdown_study,
     compute_zone_frame,
     confirmation_study,
     forward_return_study,
@@ -42,6 +44,7 @@ from .utils import clean_float
 CHART_PERIODS = 1260
 
 SHORT_TERM_ACTIONS = {
+    "SUPPORT_BREAKDOWN": ("Support breakdown", "negative", "Price closed below its most recent swing-low support and has not reclaimed it; breakdowns can keep falling. Do not buy until price closes back above the broken level."),
     "ENTRY_CONFIRMED": ("Entry confirmed", "positive", "Price tagged the buy zone and has reclaimed the prior session's high; the bounce has started."),
     "ENTRY_ZONE_BOUNCE_FORMING": ("In entry zone, bounce forming", "positive", "Price is in the buy zone and printed a reversal candle; confirmation is a close above today's high."),
     "ENTRY_ZONE": ("In entry zone", "caution", "Price is in the buy zone but has not printed a reversal signal; scale in or wait for a reversal candle."),
@@ -119,11 +122,16 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
     buy_study = reversion_study(ohlc, zones, "buy")
     sell_study = reversion_study(ohlc, zones, "sell")
     confirmed_study = confirmation_study(ohlc, zones, buy_study["baseline_success_rate"])
+    breakdown = breakdown_state(ohlc, zones, swings)
+    broken_study = breakdown_study(ohlc, zones, sell_study["baseline_success_rate"])
 
     buy_position, sell_position = buy_zone["position"], sell_zone["position"]
     touched = readiness["touched_buy_zone_recently"]
     if sell_position in {"INSIDE", "ABOVE"}:
         action = "TAKE_PROFIT_ZONE"
+    elif breakdown["active"]:
+        # A close through support overrides the bounce reading until the level is reclaimed.
+        action = "SUPPORT_BREAKDOWN"
     elif touched and readiness["stage"] == "CONFIRMED":
         action = "BOUNCE_UNDERWAY" if buy_position == "AWAY" else "ENTRY_CONFIRMED"
     elif buy_position == "INSIDE":
@@ -137,7 +145,7 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
     else:
         action = "WAIT_FOR_PULLBACK"
     label, tone, definition = SHORT_TERM_ACTIONS[action]
-    evidence = confirmed_study if action == "ENTRY_CONFIRMED" else buy_study
+    evidence = {"ENTRY_CONFIRMED": confirmed_study, "SUPPORT_BREAKDOWN": broken_study}.get(action, buy_study)
     edge = _edge_grade(evidence)
     # A setup this ticker's own history does not reward is never shown as a green light.
     if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
@@ -145,6 +153,8 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
 
     if action in {"ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE"}:
         reference, reference_basis = close, "current close"
+    elif action == "SUPPORT_BREAKDOWN":
+        reference, reference_basis = breakdown["broken_level"], "close back above the broken support (failed breakdown)"
     elif buy_position == "BELOW":
         # Below the zone a limit at its top would sit above the stop; wait for a close back inside instead.
         reference, reference_basis = buy_low, "close back above the bottom of the buy zone (reclaim)"
@@ -195,7 +205,25 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
         )
     if close < float(last["ma200"]):
         risks.append("Price is below its 200-day average; bounces in downtrends fail more often.")
-    if buy_position in {"INSIDE", "BELOW", "NEAR"} or touched:
+    if action == "SUPPORT_BREAKDOWN":
+        # Bounce statistics argue for the opposite trade, so the breakdown evidence replaces them.
+        reasons = [
+            f"Closed below swing-low support at {breakdown['broken_level']:.2f} on {breakdown['breakdown_date']}; "
+            f"still {abs(breakdown['close_vs_broken_level_pct']):.1%} below it."
+        ]
+        if broken_study["sufficient_sample"]:
+            reasons.append(
+                f"{broken_study['success_rate']:.0%} of {broken_study['episodes']} earlier breakdowns fell another {BOUNCE_ATR:g} ATR "
+                f"before rebounding {BOUNCE_ATR:g} ATR (any-day baseline {broken_study['baseline_success_rate']:.0%}); "
+                f"median further drop {broken_study['median_favorable_move']:.1%}.",
+            )
+            if (broken_study["edge_vs_baseline"] or 0) <= 0:
+                risks.insert(0, "Breakdowns below support have not kept falling more often than an arbitrary day for this ticker.")
+            if broken_study["reclaim_rate"] is not None:
+                risks.append(f"{broken_study['reclaim_rate']:.0%} of earlier breakdowns closed back above the broken level within {SHORT_TERM_HORIZON} sessions.")
+        else:
+            risks.insert(0, f"Only {broken_study['episodes']} completed support breakdowns in the history; statistics are thin.")
+    elif buy_position in {"INSIDE", "BELOW", "NEAR"} or touched:
         reasons += [f"{check['label']}: {check['detail']}." for check in readiness["checks"] if check["passed"]]
         if not any(check["passed"] for check in readiness["checks"] if check["key"] in {"reversal_candle", "reclaim"}):
             risks.append("No reversal candle or reclaim yet; selling pressure may not be finished.")
@@ -222,11 +250,13 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
             },
         },
         "bounce_readiness": readiness,
+        "breakdown": breakdown,
         "trade_plan": trade_plan,
         "history": {
             "buy_zone": _trim_study(buy_study),
             "confirmed_entry": confirmed_study,
             "sell_zone": _trim_study(sell_study),
+            "breakdown": _trim_study(broken_study),
         },
         "reasons": reasons[:6],
         "risks": risks[:5],

@@ -703,6 +703,14 @@ h1 {
   height: 3px;
 }
 
+.ladder-row.line.support .ladder-swatch i {
+  background: repeating-linear-gradient(90deg, var(--zone-buy) 0 3px, transparent 3px 5px);
+}
+
+.ladder-row.line.broken .ladder-swatch i {
+  background: var(--down);
+}
+
 .ladder-row.current {
   background: #f3f6f4;
 }

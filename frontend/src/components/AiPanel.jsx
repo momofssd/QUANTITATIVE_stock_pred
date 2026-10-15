@@ -11,6 +11,7 @@ const SECTIONS = [
 ];
 
 const VIEW_LABELS = {
+  SUPPORT_BREAKDOWN: "Support breakdown",
   ENTRY_CONFIRMED: "Entry confirmed",
   ENTRY_ZONE_BOUNCE_FORMING: "In entry zone, bounce forming",
   ENTRY_ZONE: "In entry zone",

@@ -9,9 +9,11 @@ from src.entry_zones import (
     _bracket,
     _rsi,
     adjusted_ohlcv,
+    breakdown_study,
     compute_zone_frame,
     position_in_zone,
     reversion_study,
+    swing_support,
 )
 from src.features import build_features
 from src.zone_analysis import build_zone_report
@@ -116,13 +118,15 @@ def test_zone_report_shape_and_json_serializable():
     assert report["analysis_type"] == "price_zones"
     short_term, long_term = report["short_term"], report["long_term"]
     assert short_term["action"] in {
-        "ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE", "BELOW_ENTRY_ZONE",
+        "SUPPORT_BREAKDOWN", "ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE", "BELOW_ENTRY_ZONE",
         "APPROACHING_ENTRY", "BOUNCE_UNDERWAY", "WAIT_FOR_PULLBACK", "TAKE_PROFIT_ZONE",
     }
     assert short_term["buy_zone"]["low"] < short_term["buy_zone"]["high"]
     plan = short_term["trade_plan"]
     assert plan["stop_loss"] < plan["entry_reference"] < plan["target_1"] <= plan["target_2"]
-    assert {"buy_zone", "confirmed_entry", "sell_zone"} <= set(short_term["history"])
+    assert {"buy_zone", "confirmed_entry", "sell_zone", "breakdown"} <= set(short_term["history"])
+    assert "recent_episodes" not in short_term["history"]["breakdown"]
+    assert short_term["breakdown"]["status"] in {"NONE", "ACTIVE", "RECLAIMED"}
     assert "recent_episodes" not in short_term["history"]["buy_zone"]
     assert long_term["available"] is True
     assert len(short_term["bounce_readiness"]["checks"]) == short_term["bounce_readiness"]["max_score"]
@@ -150,7 +154,7 @@ def test_zone_report_rejects_too_little_history():
         build_zone_report(_features(sessions=200), ticker="test")
 
 
-def test_trade_plan_below_zone_uses_reclaim_entry_above_current_price():
+def test_crash_through_support_waits_for_reclaim_above_current_price():
     features = _features()
     crash = features.copy()
     for column in ("Open", "High", "Low", "Close", "Adj Close"):
@@ -159,6 +163,61 @@ def test_trade_plan_below_zone_uses_reclaim_entry_above_current_price():
     report = build_zone_report(crash, ticker="test")
     short_term = report["short_term"]
     assert short_term["buy_zone"]["position"] == "BELOW"
+    # The crash also closes through swing-low support, which takes precedence over the zone.
+    assert short_term["action"] == "SUPPORT_BREAKDOWN"
     plan = short_term["trade_plan"]
-    assert plan["entry_reference"] == short_term["buy_zone"]["low"]
+    assert plan["entry_reference"] == short_term["breakdown"]["broken_level"]
+    assert plan["entry_reference"] > report["current_market"]["current_price"]
     assert plan["stop_loss"] < plan["entry_reference"] < plan["target_1"]
+
+
+def test_swing_support_is_causal():
+    ohlc = adjusted_ohlcv(_features())
+    cutoff = 1200
+    full = swing_support(ohlc).iloc[:cutoff]
+    truncated = swing_support(ohlc.iloc[:cutoff])
+    pd.testing.assert_series_equal(full, truncated)
+
+
+def test_breakdown_study_uses_sell_side_baseline():
+    ohlc = adjusted_ohlcv(_features())
+    zones = compute_zone_frame(ohlc)
+    sell = reversion_study(ohlc, zones, "sell")
+    study = breakdown_study(ohlc, zones, sell["baseline_success_rate"])
+    assert study["episodes"] >= 8
+    assert study["baseline_success_rate"] == sell["baseline_success_rate"]
+    assert all(episode["entry"] < episode["support"] for episode in study["recent_episodes"])
+
+
+def _breakdown_features(last_close: float) -> tuple[pd.DataFrame, float]:
+    """Dip to a swing low, rally, then close at `last_close` times the pre-pattern price."""
+    features = _features()
+    base = float(features["Close"].iloc[-21])
+    path = [1.0 - 0.01 * step for step in range(6)] + [0.95 + 0.01 * step for step in range(1, 8)] + [1.02] * 6 + [last_close]
+    closes = base * np.array(path)
+    rows = features.index[-len(closes):]
+    for column, values in (("Open", closes), ("High", closes * 1.002), ("Low", closes * 0.998), ("Close", closes), ("Adj Close", closes)):
+        features.loc[rows, column] = values
+    features["close"] = features["Adj Close"]
+    return features, base * 0.95 * 0.998
+
+
+def test_close_below_swing_low_reports_support_breakdown():
+    features, support = _breakdown_features(0.935)
+    short_term = build_zone_report(features, ticker="test")["short_term"]
+    breakdown = short_term["breakdown"]
+    assert short_term["action"] == "SUPPORT_BREAKDOWN"
+    assert short_term["tone"] == "negative" and short_term["is_entry_now"] is False
+    assert breakdown["active"] and breakdown["sessions_since_breakdown"] == 0
+    assert breakdown["broken_level"] == pytest.approx(support, abs=0.01)
+    assert breakdown["follow_through_target"] < float(features["close"].iloc[-1])
+    plan = short_term["trade_plan"]
+    assert plan["entry_reference"] == breakdown["broken_level"]
+    assert plan["stop_loss"] < plan["entry_reference"] < plan["target_1"]
+
+
+def test_close_above_swing_low_is_not_a_breakdown():
+    features, _ = _breakdown_features(0.96)
+    short_term = build_zone_report(features, ticker="test")["short_term"]
+    assert short_term["action"] != "SUPPORT_BREAKDOWN"
+    assert short_term["breakdown"]["active"] is False

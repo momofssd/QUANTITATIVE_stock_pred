@@ -34,6 +34,8 @@ LONG_TERM_COOLDOWN = 20
 MIN_EPISODES = 8
 BOUNCE_ATR = 1.5
 RECENT_TOUCH_SESSIONS = 3
+SWING_WINDOW = 5
+BREAKDOWN_ACTIVE_SESSIONS = 5
 
 ZONE_KEYS = ("st_buy", "st_sell", "lt_buy", "lt_sell")
 
@@ -375,7 +377,136 @@ def forward_return_study(
     }
 
 
-def swing_levels(ohlc: pd.DataFrame, window: int = 5, lookback: int = 252) -> list[dict]:
+def swing_support(ohlc: pd.DataFrame, window: int = SWING_WINDOW) -> pd.Series:
+    """Most recent confirmed swing low known after each close.
+
+    A swing low is the lowest low of a centered (2*window+1)-session span, so it
+    is only confirmed `window` sessions later. Shift by one for the level that
+    applied during a session.
+    """
+    low = ohlc["low"]
+    pivot = low == low.rolling(2 * window + 1, center=True).min()
+    return low.where(pivot).shift(window).ffill()
+
+
+def _breakdowns(ohlc: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Sessions whose close was the first close below the swing-low support that applied to them."""
+    support = swing_support(ohlc).shift().to_numpy()
+    closes = ohlc["close"].to_numpy()
+    prev_close = np.concatenate([[np.nan], closes[:-1]])
+    with np.errstate(invalid="ignore"):
+        breaks = np.isfinite(support) & (closes < support) & (prev_close >= support)
+    return breaks, support
+
+
+def breakdown_study(ohlc: pd.DataFrame, zones: pd.DataFrame, baseline_rate: float | None, horizon: int = SHORT_TERM_HORIZON) -> dict:
+    """Replay every close below swing-low support as a continuation trade.
+
+    Entry is the breakdown close. Success = price falls BOUNCE_ATR below it before
+    rising BOUNCE_ATR above it within `horizon` sessions. The baseline is the
+    sell-side bracket from every session's close, so the edge shows whether a
+    breakdown kept falling more often than an arbitrary day did.
+    """
+    highs, lows, closes = (ohlc[column].to_numpy() for column in ("high", "low", "close"))
+    atr = zones["atr"].to_numpy()
+    trend_up = (ohlc["close"].shift() > zones["ma200"].shift()).to_numpy()
+    breaks, support = _breakdowns(ohlc)
+    episodes: list[dict] = []
+    for i in np.flatnonzero(breaks & np.isfinite(atr)):
+        entry = closes[i]
+        target, stop = entry - BOUNCE_ATR * atr[i], entry + BOUNCE_ATR * atr[i]
+        outcome, target_day, favorable, adverse = _bracket(highs, lows, int(i), horizon, target, stop, "sell", False)
+        end = min(i + horizon, len(closes) - 1)
+        episodes.append(
+            {
+                "index": int(i),
+                "date": str(ohlc.index[i].date()),
+                "entry": float(entry),
+                "support": float(support[i]),
+                "outcome": outcome,
+                "success": outcome == "success",
+                "complete": outcome != "pending",
+                "trend_up": bool(trend_up[i]),
+                "favorable_move": float(1 - favorable.min() / entry) if favorable.size else 0.0,
+                "adverse_move": float(1 - adverse.max() / entry) if adverse.size else 0.0,
+                "reclaimed": bool((closes[i + 1:end + 1] >= support[i]).any()),
+                "days_to_target": target_day if outcome == "success" else None,
+            }
+        )
+    graded = [episode for episode in episodes if episode["complete"]]
+    success_rate = _rate([episode["success"] for episode in graded])
+    current_trend_up = bool(ohlc["close"].iloc[-1] > zones["ma200"].iloc[-1])
+    return {
+        "side": "breakdown",
+        "horizon_sessions": horizon,
+        "bracket_atr": BOUNCE_ATR,
+        "episodes": len(graded),
+        "sufficient_sample": len(graded) >= MIN_EPISODES,
+        "success_rate": clean_float(success_rate),
+        "failure_rate": clean_float(_rate([episode["outcome"] == "failed" for episode in graded])),
+        "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
+        "reclaim_rate": clean_float(_rate([episode["reclaimed"] for episode in graded])),
+        "baseline_success_rate": clean_float(baseline_rate),
+        "edge_vs_baseline": (
+            clean_float(success_rate - baseline_rate) if success_rate is not None and baseline_rate is not None else None
+        ),
+        "median_favorable_move": clean_float(_median([episode["favorable_move"] for episode in graded])),
+        "median_adverse_move": clean_float(_median([episode["adverse_move"] for episode in graded])),
+        "median_days_to_target": clean_float(
+            _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
+        ),
+        "by_trend": _summarize_context(episodes, current_trend_up),
+        "definition": (
+            f"First close below the most recent confirmed swing low (a {2 * SWING_WINDOW + 1}-session pivot), entered at that close. "
+            f"Worked = price fell another {BOUNCE_ATR:g} ATR before rising {BOUNCE_ATR:g} ATR, within {horizon} sessions. "
+            "Baseline = the same downside bracket from every session's close. "
+            f"Reclaim rate = share that closed back above the broken level within {horizon} sessions."
+        ),
+        "recent_episodes": episodes,
+    }
+
+
+def breakdown_state(ohlc: pd.DataFrame, zones: pd.DataFrame, swings: list[dict]) -> dict:
+    """Whether price recently closed below swing-low support and is still below it."""
+    close = float(ohlc["close"].iloc[-1])
+    atr = float(zones["atr"].iloc[-1])
+    breaks, support = _breakdowns(ohlc)
+    start = max(len(breaks) - BREAKDOWN_ACTIVE_SESSIONS, 0)
+    recent = np.flatnonzero(breaks[start:])
+    supports_below = [swing["price"] for swing in swings if swing["type"] == "swing_low" and swing["price"] < close]
+    state = {
+        "status": "NONE",
+        "active": False,
+        "broken_level": None,
+        "breakdown_date": None,
+        "sessions_since_breakdown": None,
+        "close_vs_broken_level_pct": None,
+        "follow_through_target": None,
+        "next_support": clean_float(max(supports_below), 2) if supports_below else None,
+        "definition": (
+            f"Active when a close fell below the most recent confirmed swing low within the last {BREAKDOWN_ACTIVE_SESSIONS} "
+            "sessions and price has not closed back above it."
+        ),
+    }
+    if recent.size:
+        i = start + int(recent[-1])
+        level = float(support[i])
+        active = close < level
+        state.update(
+            {
+                "status": "ACTIVE" if active else "RECLAIMED",
+                "active": active,
+                "broken_level": clean_float(level, 2),
+                "breakdown_date": str(ohlc.index[i].date()),
+                "sessions_since_breakdown": len(breaks) - 1 - i,
+                "close_vs_broken_level_pct": clean_float(close / level - 1),
+                "follow_through_target": clean_float(close - BOUNCE_ATR * atr, 2) if active else None,
+            }
+        )
+    return state
+
+
+def swing_levels(ohlc: pd.DataFrame, window: int = SWING_WINDOW, lookback: int = 252) -> list[dict]:
     """Confirmed swing highs and lows: extremes of a centered (2*window+1)-session span."""
     recent = ohlc.tail(lookback)
     span = 2 * window + 1

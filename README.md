@@ -36,7 +36,7 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 
 The React frontend shows:
 
-- **Short-term entry card**: action (`ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics
+- **Short-term entry card**: action (`SUPPORT_BREAKDOWN`, `ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics (or, after a support breakdown, the historical continuation statistics)
 - **Long-term card**: action (`ACCUMULATE`, `DEEP_VALUE_TREND_RISK`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), value and trim zones, distance from the 200-day MA, and 60-session outcomes after earlier visits
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
 - **Chart** (3M, 6M, 1Y daily; 3Y and 5Y weekly on a log scale): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome, and a stretch / RSI / MACD lower pane
@@ -57,6 +57,12 @@ The headline uses the model only when it beat the base rate out of sample (Brier
 ### Reading the bounce statistics
 
 A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
+
+### Support breakdowns
+
+Support is the most recent confirmed swing low (the lowest low of an 11-session span, known only 5 sessions after it prints). A **breakdown** is the first close below it. While a breakdown from the last 5 sessions is still unreclaimed, the short-term action is `SUPPORT_BREAKDOWN`: it overrides the buy-zone reading, the long entry moves to a close back above the broken level, and the card shows a follow-through target (1.5 ATR below the close) and the next swing-low support below.
+
+Every earlier breakdown is replayed from its close: it "worked" (kept falling) when price dropped another 1.5 ATR before rising 1.5 ATR within 10 sessions, compared with the same downside bracket from every session's close. The replay also reports how often price closed back above the broken level within 10 sessions (failed breakdowns). When this was built, breakdowns in several large single stocks (AAPL, AMZN, GOOGL) kept falling 9–12 points more often than an arbitrary day, while broad ETFs (DIA, IWB, SMH, XLI) showed no edge, and 60–80% of breakdowns were reclaimed within 10 sessions. Read the ticker's own row before assuming a breakdown will continue.
 
 Levels are causal: the zone that applied on a day was computed only from data before it. The zones shown for the next session must be recomputed after every daily close.
 
