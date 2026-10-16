@@ -54,19 +54,8 @@ def _normalize_yfinance_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _download_yahoo_chart(ticker: str, start: str, end: str | None) -> pd.DataFrame:
-    period1 = int(pd.Timestamp(start, tz="UTC").timestamp())
-    final_date = date.fromisoformat(end) if end else date.today() + timedelta(days=1)
-    period2 = int(pd.Timestamp(final_date, tz="UTC").timestamp())
-    params = urlencode(
-        {
-            "period1": period1,
-            "period2": period2,
-            "interval": "1d",
-            "events": "history",
-            "includeAdjustedClose": "true",
-        }
-    )
+def _chart_result(ticker: str, params: str) -> dict:
+    """One Yahoo chart API result with at least one timestamp, or MarketDataUnavailableError."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker, safe='')}?{params}"
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 QuantMarketResearch/2.1"})
 
@@ -80,15 +69,28 @@ def _download_yahoo_chart(ticker: str, start: str, end: str | None) -> pd.DataFr
     if chart.get("error"):
         raise MarketDataUnavailableError(f"Yahoo chart request failed for {ticker}: {chart['error']}")
     results = chart.get("result") or []
-    if not results:
+    if not results or not results[0].get("timestamp"):
         raise MarketDataUnavailableError(f"Yahoo chart returned no rows for {ticker}.")
+    return results[0]
 
-    result = results[0]
-    timestamps = result.get("timestamp") or []
+
+def _download_yahoo_chart(ticker: str, start: str, end: str | None) -> pd.DataFrame:
+    period1 = int(pd.Timestamp(start, tz="UTC").timestamp())
+    final_date = date.fromisoformat(end) if end else date.today() + timedelta(days=1)
+    period2 = int(pd.Timestamp(final_date, tz="UTC").timestamp())
+    params = urlencode(
+        {
+            "period1": period1,
+            "period2": period2,
+            "interval": "1d",
+            "events": "history",
+            "includeAdjustedClose": "true",
+        }
+    )
+    result = _chart_result(ticker, params)
+    timestamps = result["timestamp"]
     quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])[0]
     adjclose_rows = ((result.get("indicators") or {}).get("adjclose") or [{}])[0]
-    if not timestamps:
-        raise MarketDataUnavailableError(f"Yahoo chart returned no rows for {ticker}.")
 
     close = quote_rows.get("close", [])
     adjusted_close = adjclose_rows.get("adjclose") or close
@@ -103,7 +105,33 @@ def _download_yahoo_chart(ticker: str, start: str, end: str | None) -> pd.DataFr
         },
         index=pd.to_datetime(timestamps, unit="s", utc=True).tz_convert(None).normalize(),
     )
-    return _normalize_yfinance_frame(frame)
+    return _normalize_yfinance_frame(_fill_unsettled_session(frame, result.get("meta") or {}))
+
+
+def _fill_unsettled_session(frame: pd.DataFrame, meta: dict) -> pd.DataFrame:
+    """Fill the latest session from the quote summary when Yahoo has not settled its daily bar yet.
+
+    For some hours after the close Yahoo returns today's bar without a close; dropping it
+    would show yesterday's close as the current price.
+    """
+    price = meta.get("regularMarketPrice")
+    quoted_at = meta.get("regularMarketTime")
+    if frame.empty or price is None or quoted_at is None or pd.notna(frame["Close"].iloc[-1]):
+        return frame
+    if pd.Timestamp(quoted_at, unit="s", tz="UTC").tz_convert(None).normalize() != frame.index[-1]:
+        return frame
+    frame = frame.copy()
+    fills = {
+        "Close": price,
+        "Adj Close": price,
+        "High": meta.get("regularMarketDayHigh"),
+        "Low": meta.get("regularMarketDayLow"),
+        "Volume": meta.get("regularMarketVolume"),
+    }
+    for column, value in fills.items():
+        if value is not None and pd.isna(frame[column].iloc[-1]):
+            frame.iloc[-1, frame.columns.get_loc(column)] = value
+    return frame
 
 
 def download_ohlcv(ticker: str, start: str, end: str | None = None, cache: bool = True) -> pd.DataFrame:
@@ -136,6 +164,32 @@ def download_ohlcv(ticker: str, start: str, end: str | None = None, cache: bool 
     if cache:
         normalized.to_csv(cache_path)
     return normalized
+
+
+def download_intraday(ticker: str, interval: str = "60m", lookback: str = "729d", cache: bool = True) -> pd.DataFrame:
+    """Regular-session intraday bars indexed by exchange-local time.
+
+    Yahoo keeps about two years of hourly bars. Prices are split-adjusted but
+    not dividend-adjusted, unlike the daily history.
+    """
+    cache_dir = PROJECT_ROOT / "data" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    safe_ticker = ticker.replace("^", "INDEX_").replace("/", "_")
+    cache_path = cache_dir / f"{safe_ticker}_{interval}_latest.csv"
+    if cache and cache_path.exists() and time.time() - cache_path.stat().st_mtime < LIVE_CACHE_SECONDS:
+        return pd.read_csv(cache_path, index_col="Date", parse_dates=True)
+
+    result = _chart_result(ticker, urlencode({"range": lookback, "interval": interval, "includePrePost": "false"}))
+    quote_rows = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+    timezone = (result.get("meta") or {}).get("exchangeTimezoneName") or "UTC"
+    frame = pd.DataFrame(
+        {column.capitalize(): quote_rows.get(column, []) for column in ("open", "high", "low", "close", "volume")},
+        index=pd.to_datetime(result["timestamp"], unit="s", utc=True).tz_convert(timezone).tz_localize(None),
+    ).dropna(subset=["Close"])
+    frame.index.name = "Date"
+    if cache:
+        frame.to_csv(cache_path)
+    return frame
 
 
 def load_market_data(

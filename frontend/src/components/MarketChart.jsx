@@ -29,9 +29,16 @@ const RANGES = [
   { sessions: 252, label: "1Y" },
   { sessions: 756, label: "3Y" },
   { sessions: 1260, label: "5Y" },
+  { sessions: 2520, label: "10Y" },
 ];
-// Beyond one year, daily candles get thinner than a pixel, so the chart switches to weekly bars.
+// Beyond one year, daily candles get thinner than a pixel, so the range buttons switch to weekly bars
+// and the price scale turns logarithmic.
 const WEEKLY_AFTER = 252;
+const BAR_SIZES = [
+  { key: "4H", label: "4H", name: "4-hour" },
+  { key: "1D", label: "1D", name: "Daily" },
+  { key: "1W", label: "1W", name: "Weekly" },
+];
 
 const ZONES = [
   { key: "st_buy", label: "ST buy", kind: "buy", term: "short" },
@@ -40,7 +47,7 @@ const ZONES = [
   { key: "lt_sell", label: "LT trim", kind: "sell", term: "long" },
 ];
 
-const TOUCH_LABELS = { st_buy: "Buy-zone touch", st_sell: "Sell-zone touch", lt_buy: "Long-term 3:1 entry" };
+const TOUCH_LABELS = { st_buy: "Buy-zone touch", st_sell: "Sell-zone touch", lt_buy: "Long-term add (confirmed dip)" };
 
 function outcomeText(zone, outcome) {
   if (zone === "lt_buy") {
@@ -97,6 +104,7 @@ function toWeekly(points) {
     return {
       ...last,
       date: first.date,
+      key: first.date,
       sessionDates: rows.map((row) => row.date),
       open: first.open,
       high: highs.length ? Math.max(...highs) : last.close,
@@ -189,15 +197,38 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const svgRef = useRef(null);
   const dragRef = useRef(null);
   const zoomRef = useRef(null);
+  const [barSize, setBarSize] = useState("1D");
   const points = chart?.points || [];
+  const fourHourBars = chart?.bars_4h || [];
   const { range, offset } = view;
 
-  const weekly = range > WEEKLY_AFTER;
+  const dailyByDate = useMemo(() => new Map(points.map((point) => [point.date, point])), [points]);
+  const fourHourDates = useMemo(
+    () => [...new Set(fourHourBars.map((bar) => bar.date))].filter((date) => dailyByDate.has(date)),
+    [fourHourBars, dailyByDate],
+  );
+  // `range` and `offset` count trading days for every candle size, so switching keeps the same period on screen.
+  const totalSessions = barSize === "4H" ? fourHourDates.length : points.length;
+  const shownSessions = Math.max(Math.min(range, totalSessions - offset), 0);
+  const logScale = range > WEEKLY_AFTER;
   const visiblePoints = useMemo(() => {
-    const end = points.length - offset;
-    const daily = points.slice(Math.max(end - range, 0), end).filter((point) => valid(point.close));
-    return weekly ? toWeekly(daily) : daily;
-  }, [points, range, offset, weekly]);
+    const end = totalSessions - offset;
+    const start = Math.max(end - range, 0);
+    if (barSize === "4H") {
+      const days = new Set(fourHourDates.slice(start, end));
+      const bars = fourHourBars.filter((bar) => days.has(bar.date) && valid(bar.close));
+      // Zones, moving averages and the lower-pane studies are daily: each candle carries its day's values.
+      // Touches are daily too, so only a day's first candle claims them.
+      return bars.map((bar, index) => ({
+        ...dailyByDate.get(bar.date),
+        ...bar,
+        key: `${bar.date} ${bar.time}`,
+        sessionDates: index === 0 || bars[index - 1].date !== bar.date ? [bar.date] : [],
+      }));
+    }
+    const daily = points.slice(start, end).filter((point) => valid(point.close)).map((point) => ({ ...point, key: point.date }));
+    return barSize === "1W" ? toWeekly(daily) : daily;
+  }, [barSize, points, fourHourBars, fourHourDates, dailyByDate, totalSessions, range, offset]);
   const hasChart = visiblePoints.length > 0;
 
   // React registers wheel listeners as passive, so zoom needs a native listener to stop the page scrolling.
@@ -228,7 +259,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   // Touches are keyed by the bar they fall in, so weekly bars show the week's first touch per zone.
   const touchesByDate = useMemo(() => {
     const barDate = new Map();
-    visiblePoints.forEach((point) => (point.sessionDates || [point.date]).forEach((date) => barDate.set(date, point.date)));
+    visiblePoints.forEach((point) => (point.sessionDates || [point.date]).forEach((date) => barDate.set(date, point.key)));
     const map = new Map();
     (chart?.zone_touches || []).forEach((touch) => {
       const bar = barDate.get(touch.date);
@@ -261,8 +292,8 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const latestIndex = visiblePoints.length - 1;
   const latest = visiblePoints[latestIndex];
   const nextStart = xAt(latestIndex) + step / 2;
-  const sessionsPerBar = weekly ? 5 : 1;
-  zoomRef.current = { dataRight: nextStart, total: points.length };
+  const sessionsPerBar = shownSessions / visiblePoints.length;
+  zoomRef.current = { dataRight: nextStart, total: totalSessions };
 
   const priceValues = visiblePoints.flatMap((point) => [point.high, point.low, point.ema20, point.ma50, point.ma200].filter(valid));
   // Long-term zones can sit far from price; they are clipped to the pane instead of stretching the scale.
@@ -277,8 +308,8 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const priceLow = Math.max(minPrice - pricePad, minPrice * 0.9);
   const priceHigh = maxPrice + pricePad;
   // Multi-year ranges use a log scale so equal percentage moves take equal height.
-  const toScale = weekly ? (price) => Math.log(Math.max(price, priceLow * 0.5)) : (price) => price;
-  const fromScale = weekly ? Math.exp : (value) => value;
+  const toScale = logScale ? (price) => Math.log(Math.max(price, priceLow * 0.5)) : (price) => price;
+  const fromScale = logScale ? Math.exp : (value) => value;
   const scaleRange = Math.max(toScale(priceHigh) - toScale(priceLow), 1e-6);
   const priceY = (price) => TOP + ((toScale(priceHigh) - toScale(price)) / scaleRange) * PRICE_HEIGHT;
   const maximumVolume = Math.max(...visiblePoints.map((point) => point.volume || 0), 1);
@@ -333,7 +364,9 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const firstVisibleYear = visiblePoints[0].date.slice(0, 4);
   const hovered = visiblePoints[Math.min(activeIndex ?? latestIndex, latestIndex)];
   const markerZones = [...(layers.shortTouches ? ["st_buy", "st_sell"] : []), ...(layers.longTouches ? ["lt_buy"] : [])];
-  const hoveredTouches = markerZones.map((zone) => touchesByDate.get(`${hovered.date}:${zone}`)).filter(Boolean);
+  const hoveredTouches = markerZones.map((zone) => touchesByDate.get(`${hovered.key}:${zone}`)).filter(Boolean);
+  const barName = BAR_SIZES.find((size) => size.key === barSize).name;
+  const hoveredLabel = barSize === "1W" ? `Week of ${hovered.date}` : barSize === "4H" ? `${hovered.date} ${hovered.time}` : hovered.date;
 
   function handlePointerDown(event) {
     if (event.button !== 0) return;
@@ -352,7 +385,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
     if (drag?.kind === "pan") {
       // Dragging right brings older sessions into view.
       const bars = (event.clientX - drag.startX) / drag.scale / step;
-      const nextOffset = clamp(Math.round(drag.startOffset + bars * sessionsPerBar), 0, Math.max(points.length - range, 0));
+      const nextOffset = clamp(Math.round(drag.startOffset + bars * sessionsPerBar), 0, Math.max(totalSessions - range, 0));
       if (nextOffset !== offset) setView((current) => ({ ...current, offset: nextOffset }));
       return;
     }
@@ -383,6 +416,21 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
     setPriceHeight(clamp(Math.round(drag.startHeight + (event.clientY - drag.startY) / drag.scale), MIN_PRICE_HEIGHT, MAX_PRICE_HEIGHT));
   }
 
+  function chooseRange(sessions) {
+    let size = barSize;
+    if (barSize === "1D" && sessions > WEEKLY_AFTER) size = "1W";
+    if (barSize === "1W" && sessions <= WEEKLY_AFTER) size = "1D";
+    const total = size === "4H" ? fourHourDates.length : points.length;
+    setBarSize(size);
+    setView({ range: Math.min(sessions, total), offset: 0 });
+  }
+
+  function chooseBarSize(size) {
+    const total = size === "4H" ? fourHourDates.length : points.length;
+    setBarSize(size);
+    setView((current) => ({ range: clamp(current.range, Math.min(MIN_SESSIONS, total), total), offset: 0 }));
+  }
+
   function toggle(layer) {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }));
   }
@@ -398,12 +446,26 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
           </p>
         </div>
         <div className="toolbar-controls">
+          <div aria-label="Candle size" className="bar-size" role="group">
+            {BAR_SIZES.map((size) => (
+              <button
+                className={barSize === size.key ? "selected" : ""}
+                disabled={size.key === "4H" && !fourHourDates.length}
+                key={size.key}
+                onClick={() => chooseBarSize(size.key)}
+                title={size.key === "4H" ? "4-hour candles cover about the last two years (live data only)" : `${size.name} candles`}
+                type="button"
+              >
+                {size.label}
+              </button>
+            ))}
+          </div>
           {RANGES.map((option, index) => (
             <button
               className={range === option.sessions && atLatest ? "selected" : ""}
-              disabled={index > 0 && points.length <= RANGES[index - 1].sessions}
+              disabled={index > 0 && totalSessions <= RANGES[index - 1].sessions}
               key={option.sessions}
-              onClick={() => setView({ range: Math.min(option.sessions, points.length), offset: 0 })}
+              onClick={() => chooseRange(option.sessions)}
               type="button"
             >
               {option.label}
@@ -441,7 +503,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         </label>
         <label className="layer-toggle">
           <input checked={layers.longTouches} onChange={() => toggle("longTouches")} type="checkbox" />
-          <span className="swatch touch-long" /> Long-term 3:1 entries
+          <span className="swatch touch-long" /> Long-term adds
         </label>
         <span className="legend-item ma20">EMA20</span>
         <span className="legend-item ma50">MA50</span>
@@ -454,7 +516,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
       </div>
       {/* Fixed-height readout with fixed-width fields, so hovering never reflows the chart. */}
       <div className="chart-readout">
-        <span className="readout-date">{weekly ? `Week of ${hovered.date}` : hovered.date}</span>
+        <span className="readout-date">{hoveredLabel}</span>
         <span className="readout-field">O {money(hovered.open)}</span>
         <span className="readout-field">H {money(hovered.high)}</span>
         <span className="readout-field">L {money(hovered.low)}</span>
@@ -474,7 +536,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
       <svg
         aria-label="Daily candlestick chart with short-term and long-term buy and sell zones"
         className={`market-chart${dragging ? " panning" : ""}`}
-        onDoubleClick={() => setView({ range: Math.min(126, points.length), offset: 0 })}
+        onDoubleClick={() => setView({ range: Math.min(126, totalSessions), offset: 0 })}
         onPointerCancel={endDrag}
         onPointerDown={handlePointerDown}
         onPointerLeave={() => setActiveIndex(null)}
@@ -511,11 +573,10 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
             </text>
           </>
         )}
-        {weekly && (
-          <text className="pane-label" x={LEFT + 4} y={TOP + 12}>
-            Weekly bars · log scale
-          </text>
-        )}
+        <text className="pane-label" x={LEFT + 4} y={TOP + 12}>
+          {barName} bars{logScale ? " · log scale" : ""}
+          {barSize === "4H" ? " · zones, averages and studies are daily" : ""}
+        </text>
         {shownZones.map((zone) => {
           const next = nextZones[zone.key];
           return (
@@ -543,7 +604,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
           const bodyHeight = Math.max(Math.abs(priceY(open) - priceY(point.close)), 1);
           const volumeHeight = ((point.volume || 0) / maximumVolume) * VOLUME_HEIGHT;
           return (
-            <g className={point.close >= open ? "up" : "down"} key={point.date}>
+            <g className={point.close >= open ? "up" : "down"} key={point.key}>
               <line className="wick" x1={xAt(index)} x2={xAt(index)} y1={priceY(high)} y2={priceY(low)} />
               <rect className="candle" height={bodyHeight} width={candleWidth} x={xAt(index) - candleWidth / 2} y={bodyY} />
               <rect
@@ -562,15 +623,15 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         {markerZones.length > 0 &&
           visiblePoints.map((point, index) =>
             markerZones.map((zone) => {
-              const touch = touchesByDate.get(`${point.date}:${zone}`);
+              const touch = touchesByDate.get(`${point.key}:${zone}`);
               if (!touch) return null;
               if (zone === "lt_buy") {
                 // Sits below the short-term triangle so both stay visible on the same bar.
                 return (
                   <Diamond
                     className={`touch-marker buy long ${touch.outcome}`}
-                    key={`${zone}-${point.date}`}
-                    title={`${touch.date} long-term 3:1 entry at ${money(touch.entry)}: ${outcomeText(zone, touch.outcome)}`}
+                    key={`${zone}-${point.key}`}
+                    title={`${touch.date} long-term add at ${money(touch.entry)}: ${outcomeText(zone, touch.outcome)}`}
                     x={xAt(index)}
                     y={Math.min(priceY(point.low) + 24, TOP + PRICE_HEIGHT + 6)}
                   />
@@ -581,7 +642,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
               return (
                 <Triangle
                   className={`touch-marker ${buy ? "buy" : "sell"} ${touch.outcome}`}
-                  key={`${zone}-${point.date}`}
+                  key={`${zone}-${point.key}`}
                   title={`${touch.date} ${buy ? "buy" : "sell"}-zone touch at ${money(touch.entry)}: ${outcomeText(touch.zone, touch.outcome)}`}
                   up={buy}
                   x={xAt(index)}
@@ -643,7 +704,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
               <rect
                 className={point.macd_hist >= 0 ? "histogram up" : "histogram down"}
                 height={Math.abs(lowerY(point.macd_hist || 0) - lowerY(0))}
-                key={`macd-${point.date}`}
+                key={`macd-${point.key}`}
                 width={candleWidth}
                 x={xAt(index) - candleWidth / 2}
                 y={Math.min(lowerY(point.macd_hist || 0), lowerY(0))}
@@ -659,12 +720,12 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         <line className="date-axis-line" x1={LEFT} x2={plotRight} y1={DATE_AXIS_Y} y2={DATE_AXIS_Y} />
         {dateTickIndexes.map((index) => {
           const point = visiblePoints[index];
-          const includeYear = weekly || index === 0 || point.date.slice(0, 4) !== firstVisibleYear;
+          const includeYear = logScale || index === 0 || point.date.slice(0, 4) !== firstVisibleYear;
           return (
-            <g className="date-tick" key={`date-${point.date}`}>
+            <g className="date-tick" key={`date-${point.key}`}>
               <line x1={xAt(index)} x2={xAt(index)} y1={DATE_AXIS_Y} y2={DATE_AXIS_Y + 7} />
               <text className="axis-label date" x={xAt(index)} y={DATE_AXIS_Y + 23}>
-                {formatDateTick(point.date, includeYear, weekly)}
+                {formatDateTick(point.date, includeYear, logScale)}
               </text>
             </g>
           );
@@ -685,8 +746,8 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
       </div>
       <p className="chart-footnote">
         ▲ below a candle = first touch of the short-term buy zone; ▼ above = first touch of the take-profit zone. Filled = price
-        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. ◆ = long-term 3:1 entry filled (at
-        least 20 sessions apart); filled = reached the trim-zone target before the stop. Dashed = outcome still open. Hover a marker
+        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. ◆ = long-term add after a confirmed
+        dip (at least 20 sessions apart); filled = reached the trim-zone target before the stop under the dip. Dashed = outcome still open. Hover a marker
         for details.
       </p>
     </section>

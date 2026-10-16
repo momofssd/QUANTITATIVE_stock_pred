@@ -1065,6 +1065,14 @@ h1 {
   cursor: grabbing;
 }
 
+.bar-size {
+  border-right: 1px solid var(--border);
+  display: flex;
+  gap: inherit;
+  margin-right: 4px;
+  padding-right: 8px;
+}
+
 .chart-latest {
   background: var(--surface);
   border: 1px solid var(--border);

@@ -32,6 +32,14 @@ LONG_TERM_SELL_PCTL = (0.85, 0.97)
 LONG_TERM_STOP_PCTL = 0.02
 LONG_TERM_MIN_RR = 3.0
 LONG_TERM_PLAN_HORIZON = 250
+# Adding to a long-term holding waits for the dip to stop: price reached the 3:1 buy area within
+# LONG_TERM_ARM_SESSIONS, then closed above the prior LONG_TERM_RECLAIM_SESSIONS-session high.
+LONG_TERM_ARM_SESSIONS = 20
+LONG_TERM_RECLAIM_SESSIONS = 10
+LONG_TERM_ADD_MIN_RR = 2.0
+# The add is wrong if the dip's low breaks: the stop sits this many ATRs under it.
+DIP_STOP_ATR = 0.5
+LONG_TERM_ADD_ACTIVE_SESSIONS = 5
 SHORT_TERM_HORIZON = 10
 LONG_TERM_HORIZON = 60
 LONG_TERM_COOLDOWN = 20
@@ -419,36 +427,81 @@ def _r_multiple(
     return outcome, None, None
 
 
+def long_term_add_frame(ohlc: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
+    """Per-session state of the confirmed-dip add rule, all known at that session's close.
+
+    buy_area: highest value-zone price that offers LONG_TERM_MIN_RR to the target (the level that applied that session).
+    armed: price traded at or below the buy area within the last LONG_TERM_ARM_SESSIONS sessions.
+    confirm_level: highest high of the prior LONG_TERM_RECLAIM_SESSIONS sessions; closing above it shows the selling stopped.
+    stop: the tighter of DIP_STOP_ATR under the dip's low and the long-term stop, for an add at this close.
+    trigger: armed, closed above confirm_level, and at least LONG_TERM_ADD_MIN_RR to the target from this close.
+    """
+    low, high, close = ohlc["low"], ohlc["high"], ohlc["close"]
+    window = LONG_TERM_ARM_SESSIONS + 1
+    buy_area = high_rr_entry(zones["lt_stop"], zones["lt_sell_low"], zones["lt_buy_high"])
+    armed = (low <= buy_area).astype(float).rolling(window, min_periods=1).max().astype(bool)
+    dip_low = low.rolling(window, min_periods=1).min()
+    confirm_level = high.shift().rolling(LONG_TERM_RECLAIM_SESSIONS, min_periods=LONG_TERM_RECLAIM_SESSIONS).max()
+    # np.maximum keeps NaN, so no add is possible before the long-term stop exists.
+    stop = np.maximum(zones["next_lt_stop"], dip_low - DIP_STOP_ATR * zones["atr"])
+    target = zones["next_lt_sell_low"]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        reward_risk = (target - close) / (close - stop)
+    valid = (stop < close) & (close < target)
+    trigger = armed & (close > confirm_level) & valid & (reward_risk >= LONG_TERM_ADD_MIN_RR)
+    return pd.DataFrame(
+        {
+            "buy_area": buy_area,
+            "armed": armed,
+            "dip_low": dip_low,
+            "confirm_level": confirm_level,
+            "stop": stop,
+            "target": target,
+            "reward_risk": reward_risk.where(valid),
+            "trigger": trigger,
+        },
+        index=ohlc.index,
+    )
+
+
+def _max_streak(flags: list[bool]) -> int:
+    longest = current = 0
+    for flag in flags:
+        current = current + 1 if flag else 0
+        longest = max(longest, current)
+    return longest
+
+
 def long_term_plan_study(
     ohlc: pd.DataFrame,
     zones: pd.DataFrame,
-    min_rr: float = LONG_TERM_MIN_RR,
     horizon: int = LONG_TERM_PLAN_HORIZON,
     cooldown: int = LONG_TERM_COOLDOWN,
 ) -> dict:
-    """Replay the long-term plan and score it in R against entering on any day.
+    """Replay every confirmed-dip add and score it in R against buying on any day.
 
-    Entry: a limit at the highest value-zone price offering `min_rr` to the
-    target (bottom of the trim zone) with the stop at the LONG_TERM_STOP_PCTL
-    level; fills at the open if price gaps below it. Levels are fixed at entry.
-    Each trade ends at the target, the stop, or after `horizon` sessions at the
-    close. The baseline enters at every session's close with the same stop and
-    target, so the edge shows what waiting for the entry price was worth.
+    Entry is the close of a trigger session (see long_term_add_frame), at least
+    `cooldown` sessions after the previous add. Levels are fixed at entry; each
+    trade ends at the target, the stop, or after `horizon` sessions at the close,
+    and a gap through the stop exits at the open. The baseline buys every
+    session's close with the long-term stop and the same target.
+
+    Averages of rare large winners mislead, so the study also reports the median,
+    the average without the best trade, a bootstrap estimate of how often the
+    average would not beat the baseline, and the longest run of stop-outs.
     """
     opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
-    stop, target = zones["lt_stop"].to_numpy(), zones["lt_sell_low"].to_numpy()
-    limit = high_rr_entry(stop, target, zones["lt_buy_high"].to_numpy(), min_rr)
-    trend_up = (zones["ma200"].shift() > zones["ma200"].shift(21)).to_numpy()
-    with np.errstate(invalid="ignore"):
-        filled = np.isfinite(limit) & np.isfinite(stop) & np.isfinite(target) & (lows <= limit)
+    frame = long_term_add_frame(ohlc, zones)
+    stop, target, dip_low = (frame[column].to_numpy() for column in ("stop", "target", "dip_low"))
+    trend_up = (zones["ma200"] > zones["ma200"].shift(20)).to_numpy()
     episodes: list[dict] = []
     last_start = -cooldown - 1
-    for i in np.flatnonzero(filled):
-        entry = min(opens[i], limit[i])
-        if i - last_start <= cooldown or not stop[i] < entry < target[i]:
+    for i in np.flatnonzero(frame["trigger"].to_numpy()):
+        if i - last_start <= cooldown:
             continue
         last_start = i
-        outcome, r, target_day = _r_multiple(opens, highs, lows, closes, int(i), horizon, entry, stop[i], target[i], True)
+        entry = closes[i]
+        outcome, r, target_day = _r_multiple(opens, highs, lows, closes, int(i), horizon, entry, stop[i], target[i], False)
         episodes.append(
             {
                 "index": int(i),
@@ -456,6 +509,7 @@ def long_term_plan_study(
                 "entry": float(entry),
                 "stop": float(stop[i]),
                 "target": float(target[i]),
+                "dip_low": float(dip_low[i]),
                 "planned_rr": float((target[i] - entry) / (entry - stop[i])),
                 "outcome": outcome,
                 "success": outcome == "success",
@@ -471,13 +525,24 @@ def long_term_plan_study(
         if np.isfinite(next_stop[i]) and np.isfinite(next_target[i]) and next_stop[i] < closes[i] < next_target[i]:
             baseline.append(_r_multiple(opens, highs, lows, closes, i, horizon, closes[i], next_stop[i], next_target[i], False)[1])
     graded = [episode for episode in episodes if episode["complete"]]
-    expectancy = float(np.mean([episode["r_multiple"] for episode in graded])) if graded else None
+    results = np.array([episode["r_multiple"] for episode in graded])
+    expectancy = float(results.mean()) if len(results) else None
     baseline_expectancy = float(np.mean(baseline)) if baseline else None
+    without_best = float(np.sort(results)[:-1].mean()) if len(results) > 1 else None
+    no_better = None
+    if len(results) and baseline_expectancy is not None:
+        resamples = np.random.default_rng(0).choice(results, (2000, len(results))).mean(axis=1)
+        no_better = float((resamples <= baseline_expectancy).mean())
+
+    def versus_baseline(value: float | None) -> float | None:
+        return clean_float(value - baseline_expectancy, 2) if value is not None and baseline_expectancy is not None else None
+
     ma200 = zones["ma200"]
     return {
         "side": "plan",
         "horizon_sessions": horizon,
-        "min_reward_risk": min_rr,
+        "min_reward_risk": LONG_TERM_ADD_MIN_RR,
+        "buy_area_reward_risk": LONG_TERM_MIN_RR,
         "episodes": len(graded),
         "sufficient_sample": len(graded) >= MIN_EPISODES,
         "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
@@ -485,22 +550,79 @@ def long_term_plan_study(
         "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
         "win_rate": clean_float(_rate([episode["r_multiple"] > 0 for episode in graded])),
         "expectancy_r": clean_float(expectancy, 2),
+        "median_r": clean_float(_median(list(results)), 2),
+        "expectancy_without_best_r": clean_float(without_best, 2),
         "baseline_expectancy_r": clean_float(baseline_expectancy, 2),
-        "edge_r": (
-            clean_float(expectancy - baseline_expectancy, 2) if expectancy is not None and baseline_expectancy is not None else None
-        ),
+        "edge_r": versus_baseline(expectancy),
+        "edge_without_best_r": versus_baseline(without_best),
+        "probability_no_better_than_baseline": clean_float(no_better),
+        "max_consecutive_stops": _max_streak([episode["outcome"] == "failed" for episode in graded]),
         "median_planned_rr": clean_float(_median([episode["planned_rr"] for episode in graded]), 2),
         "median_days_to_target": clean_float(
             _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
         ),
         "by_trend": _summarize_context(episodes, bool(ma200.iloc[-1] > ma200.iloc[-21]) if len(ma200.dropna()) > 21 else False),
         "definition": (
-            f"Buy at the highest value-zone price that offers {min_rr:g}:1 to the bottom of the trim zone, with the stop at the "
-            f"level deeper below the 200-day MA than {1 - LONG_TERM_STOP_PCTL:.0%} of the last 5 years. Each trade ends at the "
-            f"target, the stop, or after {horizon} sessions. Results are in R (multiples of the planned risk). "
-            "Baseline = the same stop and target entered at every session's close."
+            f"Add only after a confirmed dip: price traded at or below the {LONG_TERM_MIN_RR:g}:1 buy area within "
+            f"{LONG_TERM_ARM_SESSIONS} sessions, then closed above the prior {LONG_TERM_RECLAIM_SESSIONS}-session high with at "
+            f"least {LONG_TERM_ADD_MIN_RR:g}:1 to the bottom of the trim zone. The stop sits {DIP_STOP_ATR:g} ATR under the dip's "
+            f"low (or at the long-term stop if that is higher). Each trade ends at the target, the stop, or after {horizon} "
+            "sessions; results are in R (multiples of the planned risk). Baseline = buying every session's close with the "
+            "long-term stop and the same target."
         ),
         "recent_episodes": episodes,
+    }
+
+
+def long_term_add_state(ohlc: pd.DataFrame, zones: pd.DataFrame) -> dict:
+    """Where the confirmed-dip add rule stands after the latest close.
+
+    ADD_CONFIRMED: a trigger fired within LONG_TERM_ADD_ACTIVE_SESSIONS and price still offers the minimum reward/risk.
+    DIP_STILL_FALLING: price reached the buy area but has not closed above the prior high yet.
+    BOUNCED_LOW_RR: the dip already turned up, but too far to offer the minimum reward/risk.
+    NO_DIP: price has not reached the buy area within the arming window.
+    """
+    frame = long_term_add_frame(ohlc, zones)
+    last = frame.iloc[-1]
+    close = float(ohlc["close"].iloc[-1])
+    target = float(last["target"])
+    armed = bool(last["armed"])
+    recent = frame["trigger"].to_numpy()[-LONG_TERM_ADD_ACTIVE_SESSIONS:]
+    trigger_index = len(frame) - LONG_TERM_ADD_ACTIVE_SESSIONS + int(np.flatnonzero(recent)[-1]) if recent.any() else None
+    # After a trigger the stop stays where it was set; during a dip it moves with the dip's low; otherwise it is
+    # the long-term stop.
+    if trigger_index is not None:
+        stop = float(frame["stop"].iloc[trigger_index])
+    elif armed:
+        stop = float(last["stop"])
+    else:
+        stop = float(zones["next_lt_stop"].iloc[-1])
+    reward_risk_now = (target - close) / (close - stop) if stop < close < target else None
+    if trigger_index is not None and reward_risk_now is not None and reward_risk_now >= LONG_TERM_ADD_MIN_RR:
+        status = "ADD_CONFIRMED"
+    elif armed and not close > last["confirm_level"]:
+        status = "DIP_STILL_FALLING"
+    elif armed:
+        status = "BOUNCED_LOW_RR"
+    else:
+        status = "NO_DIP"
+    # Levels for the next session: the confirmation is a close above the last N highs, including today's.
+    confirm_above = float(ohlc["high"].iloc[-LONG_TERM_RECLAIM_SESSIONS:].max())
+    next_buy_area = float(high_rr_entry(zones["next_lt_stop"].iloc[-1], target, zones["next_lt_buy_high"].iloc[-1]))
+    reward_risk_at_confirm = (target - confirm_above) / (confirm_above - stop) if stop < confirm_above < target else None
+    return {
+        "status": status,
+        "armed": armed,
+        "buy_area": clean_float(next_buy_area, 2),
+        "distance_to_buy_area_pct": clean_float(close / next_buy_area - 1),
+        "dip_low": clean_float(last["dip_low"], 2) if armed else None,
+        "confirm_above": clean_float(confirm_above, 2),
+        "trigger_date": str(ohlc.index[trigger_index].date()) if trigger_index is not None else None,
+        "stop": clean_float(stop, 2),
+        "target": clean_float(target, 2),
+        "reward_risk_now": clean_float(reward_risk_now, 2),
+        "reward_risk_at_confirm": clean_float(reward_risk_at_confirm, 2),
+        "risk_to_stop_now_pct": clean_float(1 - stop / close) if close > stop else None,
     }
 
 

@@ -37,9 +37,9 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 The React frontend shows:
 
 - **Short-term entry card**: action (`SUPPORT_BREAKDOWN`, `ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics (or, after a support breakdown, the historical continuation statistics)
-- **Long-term card**: action (`ACCUMULATE`, `VALUE_ZONE_LOW_RR`, `DEEP_VALUE_TREND_RISK`, `BELOW_LONG_TERM_STOP`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), the 3:1 entry, stop, target and current reward/risk, value and trim zones, distance from the 200-day MA, and the plan's replay against buying on any day
+- **Long-term card**: action (`ADD_CONFIRMED`, `DIP_STILL_FALLING`, `BOUNCED_LOW_RR`, `VALUE_ZONE_LOW_RR`, `DEEP_VALUE_TREND_RISK`, `BELOW_LONG_TERM_STOP`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), the buy area, the confirmation price, the stop under the dip, the target, value and trim zones, distance from the 200-day MA, and the replay of past adds against buying on any day
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
-- **Chart** (3M, 6M, 1Y daily; 3Y and 5Y weekly on a log scale): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ short-term buy/take-profit, ◆ long-term 3:1 entry), and a stretch / RSI / MACD lower pane
+- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ short-term buy/take-profit, ◆ long-term add after a confirmed dip), and a stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
 - **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
 - **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
@@ -58,17 +58,20 @@ The headline uses the model only when it beat the base rate out of sample (Brier
 
 A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
 
-### Long-term 3:1 plan
+### Long-term adds: buy the dip only after it stops falling
 
-The long-term trade plan is built for reward/risk, not just for "cheap":
+The long-term signal is built for adding shares to a holding without buying in the middle of a decline:
 
-- **Stop**: the price that would put the ticker further below its 200-day MA than on 98% of sessions in the last 5 years. Below it the long-term case is broken (`BELOW_LONG_TERM_STOP`).
-- **Target**: the bottom of the long-term trim zone (85th percentile distance above the 200-day MA).
-- **Entry**: the highest price at or below the value-zone top that offers at least 3:1 to the target. `ACCUMULATE` means price is at or below it; inside the value zone but above it is `VALUE_ZONE_LOW_RR`.
+1. **Buy area**: the highest price at or below the value-zone top that offers at least 3:1 to the target. Reaching it _arms_ the add for 20 sessions; it is not a buy by itself.
+2. **Still falling → no add** (`DIP_STILL_FALLING`): while price stays at or below its prior 10-session high, the selling is not done and a dip that keeps falling may be breaking support.
+3. **Confirmed → add** (`ADD_CONFIRMED`): a close above the prior 10-session high, with at least 2:1 reward/risk from that close. If the turn has already gone too far for 2:1, the reading is `BOUNCED_LOW_RR`.
+4. **Stop under the dip**: 0.5 ATR below the dip's low, or the long-term stop if that is higher. If the dip's low breaks after the add, support has failed and the add is wrong.
+5. **Long-term stop**: the price that would put the ticker further below its 200-day MA than on 98% of sessions in the last 5 years. Below it nothing is added (`BELOW_LONG_TERM_STOP`).
+6. **Target**: the bottom of the long-term trim zone (85th percentile distance above the 200-day MA).
 
-The plan is replayed on every earlier fill (at least 20 sessions apart, levels fixed at entry, gaps through the stop exit at the open) and scored in **R**, the profit or loss as a multiple of the planned risk. Each trade ends at the target, the stop, or after 250 sessions. The baseline enters the same stop and target at every session's close, so the edge is what waiting for the 3:1 price was worth. `ACCUMULATE` is only shown as positive when the ticker's own plan beat that baseline. The 60-session value-zone replay also shows its any-day baseline now.
+Every past add (at least 20 sessions apart, levels fixed at the add, gaps through the stop exit at the open) is scored in **R**, the profit or loss as a multiple of the planned risk, and ends at the target, the stop, or after 250 sessions. The baseline buys every session's close with the long-term stop and the same target. Because a few large winners can carry an average, the replay also reports the median R, the edge without the single best add, a bootstrap "chance of luck" (how often the average would not beat the baseline), and the longest run of stop-outs. The edge grade is `EDGE` only when the edge is at least +0.25R, survives dropping the best add, and the chance of luck is 10% or less; `SLIGHT_EDGE` when it survives dropping the best add; otherwise `NO_EDGE`. `ADD_CONFIRMED` is shown as positive only with `EDGE` or `SLIGHT_EDGE`.
 
-When this was built, across 15 large tickers the plan averaged +0.82R per trade against +0.34R for the same stop and target bought on any day, and beat its baseline on 10 of 15 (losers: XLE, XLF, AMZN, MSFT, IWM). Win rates are low (14–49%), as expected for 3:1 trades, and a reward/risk at today's price can look very high when price sits just above the stop, so read it with the stop distance next to it. The stop, target and 3:1 threshold were chosen by comparing six variants on those same tickers, so treat the edge as optimistic.
+The previous version bought as soon as price touched the 3:1 price. In 2022 it bought AAPL seven times and SMH nine times on the way down, every one stopped out. When this was built, on 15 large tickers, waiting for the confirmation cut the average longest losing run from 11.3 adds to 6.3, while the average edge over buying on any day stayed similar (+0.62R vs +0.50R; 10 of 15 positive). Only AAPL, GLD, JPM and META graded `EDGE`; NVDA, TSLA, AMZN, XLE, XLF, TLT, IWM and SMH showed no edge. The rule was chosen by comparing six variants on those same tickers, so treat the edge as optimistic.
 
 ### Support breakdowns
 

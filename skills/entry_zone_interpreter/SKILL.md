@@ -58,15 +58,18 @@ How to read a short-term row, in this order:
 - `buy_zone`: worked = higher close 60 sessions later. Always compare the rate with `baseline_success_rate` (the same test from any day); most stocks close higher 60 sessions later on most days, so a high rate alone proves nothing. Report `edge_vs_baseline`, `median_forward_return` vs `baseline_median_forward_return`, and `median_max_drawdown` (how deep it usually fell first).
 - `sell_zone`: worked = lower close 60 sessions later, i.e. trimming avoided a decline. A low rate with a positive `median_forward_return` means trimming there usually cost money; say so plainly.
 
-- `plan`: the long-term 3:1 plan, scored in R (profit or loss as a multiple of the planned risk). Explain R once. The key comparison is `expectancy_r` vs `baseline_expectancy_r` (the same stop and target bought on any day); `edge_r` is the difference. A 3:1 plan wins less than half the time by design; never present `success_rate` against 100%.
+- `plan`: past long-term adds after a confirmed dip, scored in R (profit or loss as a multiple of the planned risk). Explain R once. The key comparison is `expectancy_r` vs `baseline_expectancy_r` (buying on any day); `edge_r` is the difference. Always check it holds up: `median_r` (the typical add), `edge_without_best_r` (negative means one trade carried it), `probability_no_better_than_baseline` (under 10% is convincing), and `max_consecutive_stops`. Never present `success_rate` against 100%.
 
 Never call a replay rate a probability or a prediction. Say "in past visits".
 
-### Long-term plan
-- `trade_plan.entry` is the highest price that offers `min_reward_risk` (3:1) to `target` with the `stop`. Give all three prices and how far price is from the entry (`distance_to_entry_pct`; positive means price must fall that much).
-- `reward_risk_now` is reward/risk if bought today. Always pair it with `risk_to_stop_now_pct`: a high ratio with the stop only a few percent away is a tight stop, not a bargain.
-- Action meanings: accumulate = at or below the 3:1 entry; in value zone with reward/risk under 3:1 = cheap but the stop is too far for 3:1; below value zone = cheaper than the zone but above the 3:1 entry; below long-term stop = the plan is invalidated.
-- `long_term.historical_edge` grades the plan against buying on any day. Do not describe the long-term entry as favorable when the grade is no edge or thin sample.
+### Long-term adds (adding shares to a holding)
+The rule never recommends adding while price is still falling. Explain it in this order:
+1. `trade_plan.buy_area`: reaching it arms an add for 20 sessions; it is not a buy by itself. If `armed` is false, give `distance_to_buy_area_pct` (positive means price must fall that much).
+2. `trade_plan.confirm_above`: the add needs a close above this (the prior `confirm_sessions`-session high). While price is below it the dip is still falling.
+3. `trade_plan.stop`: when `armed`, it sits under the dip's low (`dip_low`); if that low breaks, support has failed. Otherwise it is the long-term stop.
+4. `trade_plan.target`, `reward_risk_now` with `risk_to_stop_now_pct`.
+- Action meanings: add shares, dip confirmed = the dip turned up with at least 2:1 left; in buy area, still falling = do not add yet; dip already bounced = too late for 2:1, wait for the next dip; in value zone, above buy area = cheap but not cheap enough; below long-term stop = do not add.
+- `long_term.historical_edge` grades past adds against buying on any day. Do not describe adding as favorable when the grade is no edge or thin sample, and say "edge came from one trade" plainly when that is the label.
 
 ### Trend outlook
 - `probability_bullish` is the headline. When `probability_source` is `base_rate`, it is only how often the ticker closed higher over that horizon historically. Say that plainly and do not call it a forecast.
@@ -126,7 +129,7 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 | Close below swing-low support (kept falling) | … | …% | …% | ± … pts |
 | Long-term value zone (60 sessions) | … | …% | …% | ± … pts |
 | Long-term trim zone (60 sessions) | … | …% | …% | ± … pts |
-| Long-term 3:1 plan (avg R) | … | …R | …R | ± …R |
+| Long-term adds after a confirmed dip (avg R; median R; edge without best) | … | …R | …R | ± …R |
 
 #### What this means
 - One bullet per row, following the reading steps above.
@@ -135,7 +138,7 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 
 **`trend_outlook_markdown`**: one bullet per horizon (10 and 60 sessions) giving the bullish probability, whether it is a base rate or a tested model call, and the model's test result in plain words.
 
-**`long_term_markdown`**: the 3:1 plan first (entry, stop, target, distance to the entry, reward/risk now with the stop distance), then where price sits between the value and trim zones, its distance from the 200-day MA, and how the plan and the zones did against buying on any day.
+**`long_term_markdown`**: the add rule first (buy area, whether the dip is armed, the confirmation price, the stop under the dip, the target, reward/risk now with the stop distance), then where price sits between the value and trim zones, its distance from the 200-day MA, and how the plan and the zones did against buying on any day.
 
 **`key_reasons`, `main_risks`**: 3–5 short plain sentences each, no markdown.
 

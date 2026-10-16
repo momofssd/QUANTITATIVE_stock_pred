@@ -204,23 +204,44 @@ export function LongTermCard({ longTerm }) {
   const replay = longTerm.history.plan;
   const edge = longTerm.historical_edge;
   const distance = longTerm.distance_from_ma200;
-  const toEntry = plan.distance_to_entry_pct > 0 ? `needs ${signedPercent(-plan.distance_to_entry_pct)}` : "price is at or below it";
+  const buyAreaDetail = plan.armed
+    ? `reached · dip low ${dollar(plan.dip_low)}`
+    : plan.distance_to_buy_area_pct > 0
+      ? `needs ${signedPercent(-plan.distance_to_buy_area_pct)} to arm the add`
+      : "price is at or below it";
+  const confirmDetail = {
+    ADD_CONFIRMED: `confirmed ${plan.trigger_date}`,
+    DIP_STILL_FALLING: "not yet: the dip is still falling",
+    BOUNCED_LOW_RR: "already bounced; reward/risk too low now",
+    NO_DIP: `prior ${plan.confirm_sessions}-session high; only counts after a dip`,
+  }[plan.status];
+  const rewardNow = isNumber(plan.reward_risk_now) ? `${fixed(plan.reward_risk_now, 1)}:1 from today` : "no reward/risk from today";
   return (
     <section className={`hero-card ${longTerm.tone} long-card`}>
       <div className="hero-head">
-        <p className="eyebrow">Long-term entry · {replay.min_reward_risk}:1 plan over {plan.horizon_sessions} sessions</p>
+        <p className="eyebrow">Long-term add · confirmed dip · {plan.horizon_sessions}-session plan</p>
         <span className={`chip ${EDGE_TONE[edge.grade]}`}>{edge.label}</span>
       </div>
       <h2>{longTerm.action_label}</h2>
       <p className="summary">{longTerm.action_definition}</p>
       <div className="hero-facts">
-        <Fact detail={toEntry} label={`${replay.min_reward_risk}:1 entry (buy at or below)`} value={dollar(plan.entry)} />
-        <Fact detail="the long-term case is broken below this" label="Stop" value={dollar(plan.stop)} />
-        <Fact detail="bottom of the trim zone" label="Target" value={dollar(plan.target)} />
+        <Fact detail={buyAreaDetail} label={`Buy area (${replay.buy_area_reward_risk}:1 or better)`} value={dollar(plan.buy_area)} />
+        <Fact detail={confirmDetail} label="Add on a close above" value={dollar(plan.confirm_above)} />
         <Fact
-          detail={`${isNumber(plan.risk_to_stop_now_pct) ? `stop ${percent(plan.risk_to_stop_now_pct)} below · ` : ""}${fixed(plan.reward_risk_at_zone_top, 1)}:1 at the value-zone top`}
-          label="Reward/risk at today's price"
-          value={isNumber(plan.reward_risk_now) ? `${fixed(plan.reward_risk_now, 1)}:1` : "-"}
+          detail={
+            plan.stop_under_dip
+              ? "under the dip's low: support failed below this"
+              : plan.armed
+                ? "long-term stop (the dip undercut it intraday)"
+                : "long-term stop; an add's stop goes under the dip's low"
+          }
+          label="Stop"
+          value={dollar(plan.stop)}
+        />
+        <Fact
+          detail={`${rewardNow}${isNumber(plan.risk_to_stop_now_pct) ? ` · stop ${percent(plan.risk_to_stop_now_pct)} below` : ""}`}
+          label="Target (trim zone)"
+          value={dollar(plan.target)}
         />
       </div>
       <div className="hero-facts two">
@@ -238,19 +259,19 @@ export function LongTermCard({ longTerm }) {
       />
       <div className="hero-stats">
         <Stat
-          detail={`vs ${signedR(replay.baseline_expectancy_r)} buying on any day · ${replay.episodes} trades`}
-          label={`Average result of past ${replay.min_reward_risk}:1 entries`}
+          detail={`median ${signedR(replay.median_r)} · vs ${signedR(replay.baseline_expectancy_r)} buying on any day · ${replay.episodes} adds`}
+          label="Average result of past confirmed adds"
           value={signedR(replay.expectancy_r)}
         />
         <Stat
-          detail={`${percent(replay.stop_rate, 0)} stopped · rest closed after ${replay.horizon_sessions} sessions`}
-          label="Reached the target"
-          value={percent(replay.success_rate, 0)}
+          detail={`${percent(replay.probability_no_better_than_baseline, 0)} chance the edge is luck`}
+          label="Average without the best trade"
+          value={signedR(replay.expectancy_without_best_r)}
         />
         <Stat
-          detail={`median ${fixed(replay.median_days_to_target, 0)} sessions to the target when it hit`}
-          label="Ended with a profit"
-          value={percent(replay.win_rate, 0)}
+          detail={`${percent(replay.stop_rate, 0)} stopped · longest losing run ${replay.max_consecutive_stops}`}
+          label="Reached the target"
+          value={percent(replay.success_rate, 0)}
         />
         <Stat
           detail={`vs ${percent(buy.baseline_success_rate, 0)} on any day · ${buy.episodes} visits`}
@@ -259,8 +280,9 @@ export function LongTermCard({ longTerm }) {
         />
       </div>
       <p className="footnote">
-        R = profit or loss as a multiple of the amount risked (entry minus stop). A {replay.min_reward_risk}:1 plan wins less than half the
-        time and still pays when it does; compare its average R with buying on any day, not its hit rate with 100%.
+        An add needs the dip first (price reaches the buy area) and then a close above the prior {plan.confirm_sessions}-session high, so it never
+        fires while price is still falling. R = profit or loss as a multiple of the amount risked (entry minus stop). Compare the
+        average with buying on any day, and check it still holds without the best trade.
       </p>
     </section>
   );
@@ -283,9 +305,12 @@ export function LevelLadder({ report }) {
     levels.push(
       { key: "lt_sell", label: "Long-term trim zone", zone: longTerm.sell_zone, kind: "sell long" },
       { key: "lt_buy", label: "Long-term value zone", zone: longTerm.buy_zone, kind: "buy long" },
-      { key: "lt_entry", label: `Long-term ${longTerm.history.plan.min_reward_risk}:1 entry`, price: longTerm.trade_plan.entry, kind: "line lt-entry" },
-      { key: "lt_stop", label: "Long-term stop", price: longTerm.trade_plan.stop, kind: "line broken" },
+      { key: "lt_entry", label: "Long-term buy area", price: longTerm.trade_plan.buy_area, kind: "line lt-entry" },
+      { key: "lt_stop", label: longTerm.trade_plan.stop_under_dip ? "Long-term add stop (under dip)" : "Long-term stop", price: longTerm.trade_plan.stop, kind: "line broken" },
     );
+    if (longTerm.trade_plan.armed) {
+      levels.push({ key: "lt_confirm", label: "Long-term add: close above", price: longTerm.trade_plan.confirm_above, kind: "line lt-entry" });
+    }
   }
   const middle = (level) => (level.zone ? (level.zone.low + level.zone.high) / 2 : level.price);
   const ordered = levels.filter((level) => isNumber(middle(level))).sort((left, right) => middle(right) - middle(left));
@@ -505,15 +530,18 @@ export function EvidenceTables({ shortTerm, longTerm }) {
 
 // Column definitions, rendered as header tooltips and as the list under the table.
 function planColumns(study) {
-  const rr = study.min_reward_risk;
   return [
-    ["Trades", `Completed past fills of the ${rr}:1 entry, at least 20 sessions apart. Trades still open are not counted.`],
-    ["Hit target", `Share of trades that reached the target (bottom of the trim zone) before the stop.`],
-    ["Stopped", `Share of trades that hit the stop first. The rest closed at the price after ${study.horizon_sessions} sessions.`],
-    ["Average R", "Average result per trade in R, where 1R is the amount risked (entry minus stop). +1R gained that amount; −1R lost it."],
-    ["Any day", "Average R of the same stop and target if bought at the close of every session instead of waiting for the entry price."],
-    ["Edge", `Average R minus Any day: how much waiting for the ${rr}:1 price earned per trade. Positive (green) means it beat buying on any day.`],
-    ["Current trend context", "Hit-target rate for trades taken while the 200-day MA pointed the same way as today (rising = uptrend, falling = downtrend), with the trade count."],
+    ["Adds", "Completed past confirmed adds, at least 20 sessions apart. Adds still open are not counted."],
+    ["Hit target", "Share of adds that reached the target (bottom of the trim zone) before the stop."],
+    ["Stopped", `Share of adds that hit the stop under the dip's low first. The rest closed at the price after ${study.horizon_sessions} sessions.`],
+    ["Average R", "Average result per add in R, where 1R is the amount risked (entry minus stop). +1R gained that amount; −1R lost it."],
+    ["Median R", "The middle result. When it is far below the average, a few big winners carry the average."],
+    ["Any day", "Average R of buying at the close of every session with the long-term stop and the same target."],
+    ["Edge", "Average R minus Any day: how much waiting for a confirmed dip earned per add. Positive (green) means it beat buying on any day."],
+    ["Edge w/o best", "The edge after removing the single best add. If it turns negative, one lucky trade made the result."],
+    ["Chance of luck", "How often the average came out no better than Any day when the past adds were resampled at random. Under 10% is convincing."],
+    ["Longest losing run", "Most stop-outs in a row: how many failed adds you would have had to sit through."],
+    ["Current trend context", "Hit-target rate for adds made while the 200-day MA pointed the same way as today (rising = uptrend, falling = downtrend), with the count."],
   ];
 }
 
@@ -521,9 +549,7 @@ function LongTermPlanTable({ study }) {
   const columns = planColumns(study);
   return (
     <>
-      <h3>
-        Long-term {study.min_reward_risk}:1 plan: target, stop, or exit after {study.horizon_sessions} sessions
-      </h3>
+      <h3>Long-term adds after a confirmed dip: target, stop under the dip, or exit after {study.horizon_sessions} sessions</h3>
       <table className="evidence-table">
         <thead>
           <tr>
@@ -537,13 +563,19 @@ function LongTermPlanTable({ study }) {
         </thead>
         <tbody>
           <tr>
-            <th scope="row">Buy at the {study.min_reward_risk}:1 entry (median plan {fixed(study.median_planned_rr, 1)}:1)</th>
+            <th scope="row">Add after a confirmed dip (median plan {fixed(study.median_planned_rr, 1)}:1)</th>
             <td>{study.episodes}</td>
             <td>{percent(study.success_rate, 0)}</td>
             <td>{percent(study.stop_rate, 0)}</td>
             <td>{signedR(study.expectancy_r)}</td>
+            <td>{signedR(study.median_r)}</td>
             <td>{signedR(study.baseline_expectancy_r)}</td>
             <td className={isNumber(study.edge_r) ? (study.edge_r > 0 ? "good" : "bad") : ""}>{signedR(study.edge_r)}</td>
+            <td className={isNumber(study.edge_without_best_r) ? (study.edge_without_best_r > 0 ? "good" : "bad") : ""}>
+              {signedR(study.edge_without_best_r)}
+            </td>
+            <td>{percent(study.probability_no_better_than_baseline, 0)}</td>
+            <td>{study.max_consecutive_stops}</td>
             <td>{contextRate(study)}</td>
           </tr>
         </tbody>
@@ -551,7 +583,7 @@ function LongTermPlanTable({ study }) {
       <dl className="column-definitions">
         <div>
           <dt>Median plan</dt>
-          <dd>The typical planned reward/risk at entry. It exceeds {study.min_reward_risk}:1 when price opened below the entry price.</dd>
+          <dd>The typical planned reward/risk at the add. Every add needed at least {study.min_reward_risk}:1.</dd>
         </div>
         {columns.map(([name, definition]) => (
           <div key={name}>

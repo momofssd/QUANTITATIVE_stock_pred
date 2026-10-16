@@ -86,3 +86,27 @@ def test_past_end_date_cache_is_reused_regardless_of_age(monkeypatch, tmp_path):
     os.utime(cached, (0, 0))
     data_loader.download_ohlcv("SMH", "2026-05-01", "2026-05-27")
     assert len(calls) == 1
+
+
+def test_unsettled_latest_session_is_filled_from_the_quote():
+    frame = sample_frame()
+    frame.iloc[-1, frame.columns.get_loc("Close")] = None
+    frame.iloc[-1, frame.columns.get_loc("Adj Close")] = None
+    meta = {
+        "regularMarketPrice": 104.5,
+        "regularMarketDayHigh": 105.0,
+        "regularMarketDayLow": 100.5,
+        "regularMarketVolume": 1500,
+        "regularMarketTime": int(pd.Timestamp("2026-05-26 20:00", tz="UTC").timestamp()),
+    }
+    filled = data_loader._fill_unsettled_session(frame, meta)
+    assert filled["Close"].iloc[-1] == 104.5 and filled["Adj Close"].iloc[-1] == 104.5
+    # Values Yahoo did send are kept.
+    assert filled["High"].iloc[-1] == 103.0
+
+
+def test_quote_from_another_day_does_not_fill_the_latest_session():
+    frame = sample_frame()
+    frame.iloc[-1, frame.columns.get_loc("Close")] = None
+    meta = {"regularMarketPrice": 104.5, "regularMarketTime": int(pd.Timestamp("2026-05-27 20:00", tz="UTC").timestamp())}
+    assert pd.isna(data_loader._fill_unsettled_session(frame, meta)["Close"].iloc[-1])

@@ -134,7 +134,7 @@ def test_zone_report_shape_and_json_serializable():
     assert long_term["available"] is True
     assert len(short_term["bounce_readiness"]["checks"]) == short_term["bounce_readiness"]["max_score"]
     points = report["chart_data"]["points"]
-    assert len(points) == 1260
+    assert len(points) == min(len(_features()), 2520)
     assert set(report["trend_outlook"]) == {"short_term", "long_term"}
     assert {"st_buy_low", "st_buy_high", "lt_sell_high", "stretch", "stretch_p05"} <= set(points[-1])
 
@@ -239,14 +239,21 @@ def test_long_term_zone_replay_reports_any_day_baseline():
     assert study["edge_vs_baseline"] == pytest.approx(study["success_rate"] - study["baseline_success_rate"], abs=1e-3)
 
 
-def test_long_term_plan_study_scores_trades_in_r():
+def test_long_term_plan_study_only_adds_after_a_confirmed_dip():
     ohlc = adjusted_ohlcv(_features(sessions=2500))
-    study = long_term_plan_study(ohlc, compute_zone_frame(ohlc))
-    assert study["episodes"] >= 8
+    zones = compute_zone_frame(ohlc)
+    study = long_term_plan_study(ohlc, zones)
+    assert study["episodes"] >= 3
     assert study["edge_r"] == pytest.approx(study["expectancy_r"] - study["baseline_expectancy_r"], abs=0.011)
+    assert 0 <= study["probability_no_better_than_baseline"] <= 1
+    highs, lows, atr = ohlc["high"].to_numpy(), ohlc["low"].to_numpy(), zones["atr"].to_numpy()
     for episode in study["recent_episodes"]:
-        assert episode["stop"] < episode["entry"] < episode["target"]
-        assert episode["planned_rr"] >= 3.0 - 1e-9
+        i = episode["index"]
+        # The add is a close above the prior 10-session high, after the dip, with the stop under the dip's low.
+        assert episode["entry"] > highs[i - 10:i].max()
+        assert episode["stop"] < episode["dip_low"] <= lows[i]
+        assert episode["stop"] >= episode["dip_low"] - 0.5 * atr[i] - 1e-9
+        assert episode["planned_rr"] >= 2.0 - 1e-9
         if episode["outcome"] == "success":
             assert episode["r_multiple"] == pytest.approx(episode["planned_rr"])
         elif episode["outcome"] == "failed":
@@ -265,20 +272,42 @@ def _long_term_report(price_from_plan):
     return build_zone_report(moved, ticker="test")["long_term"]
 
 
+def _dip_report(last_close: float):
+    """Fall from 10% above the buy area to 7% below it over 24 sessions, then close at `last_close` x buy area."""
+    features = _features(sessions=2500)
+    buy_area = build_zone_report(features, ticker="test")["long_term"]["trade_plan"]["buy_area"]
+    path = np.concatenate([np.linspace(1.10, 0.95, 15), np.linspace(0.945, 0.93, 9), [last_close]]) * buy_area
+    rows = features.index[-len(path):]
+    for column, values in (("Open", path), ("High", path * 1.003), ("Low", path * 0.997), ("Close", path), ("Adj Close", path)):
+        features.loc[rows, column] = values
+    features["close"] = features["Adj Close"]
+    return build_zone_report(features, ticker="test")["long_term"]
+
+
 def test_long_term_plan_fields_are_consistent():
     long_term = build_zone_report(_features(sessions=2500), ticker="test")["long_term"]
     plan = long_term["trade_plan"]
-    assert plan["stop"] < plan["entry"] <= long_term["buy_zone"]["high"]
-    assert plan["reward_risk_at_entry"] >= 3.0 - 0.01
+    assert plan["status"] in {"ADD_CONFIRMED", "DIP_STILL_FALLING", "BOUNCED_LOW_RR", "NO_DIP"}
+    assert plan["stop"] < plan["target"]
+    assert plan["buy_area"] <= long_term["buy_zone"]["high"]
     assert set(long_term["history"]) == {"buy_zone", "sell_zone", "plan"}
     if long_term["tone"] == "positive":
         assert long_term["historical_edge"]["grade"] in {"EDGE", "SLIGHT_EDGE"}
 
 
-def test_price_at_the_3_to_1_entry_is_accumulate():
-    long_term = _long_term_report(lambda plan: (plan["stop"] + plan["entry"]) / 2)
-    assert long_term["action"] == "ACCUMULATE"
-    assert long_term["trade_plan"]["reward_risk_now"] >= 3.0
+def test_dip_that_keeps_falling_is_not_an_add():
+    long_term = _dip_report(0.92)
+    assert long_term["action"] == "DIP_STILL_FALLING"
+    assert long_term["tone"] != "positive"
+    assert long_term["trade_plan"]["confirm_above"] > 0.92 * long_term["trade_plan"]["buy_area"]
+
+
+def test_dip_that_closes_above_the_prior_high_is_an_add_with_the_stop_under_the_dip():
+    long_term = _dip_report(0.97)
+    plan = long_term["trade_plan"]
+    assert long_term["action"] == "ADD_CONFIRMED"
+    assert plan["stop"] < plan["dip_low"] and plan["stop_under_dip"]
+    assert plan["reward_risk_now"] >= 2.0
 
 
 def test_price_below_the_long_term_stop_invalidates_the_plan():
@@ -286,3 +315,25 @@ def test_price_below_the_long_term_stop_invalidates_the_plan():
     assert long_term["action"] == "BELOW_LONG_TERM_STOP"
     assert long_term["tone"] == "negative"
     assert long_term["trade_plan"]["reward_risk_now"] is None
+
+
+def test_hourly_bars_group_into_two_adjusted_4h_candles_per_session():
+    from src.zone_analysis import _four_hour_bars
+
+    hours = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30", "16:00"]
+    index = pd.to_datetime([f"2026-05-{day} {hour}" for day in (26, 27) for hour in hours])
+    prices = np.arange(len(index), dtype=float) + 100
+    intraday = pd.DataFrame({"Open": prices, "High": prices + 1, "Low": prices - 1, "Close": prices + 0.5, "Volume": 10.0}, index=index)
+    # Day one has a dividend adjustment of 0.98; day two none. Hourly bars after the daily history are dropped.
+    features = pd.DataFrame({"Close": [200.0, 210.0], "close": [196.0, 210.0]}, index=pd.to_datetime(["2026-05-26", "2026-05-27"]))
+    later = pd.DataFrame({"Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 1.0}, index=pd.to_datetime(["2026-05-28 09:30"]))
+    bars = _four_hour_bars(pd.concat([intraday, later]), features)
+    assert [(bar["date"], bar["time"]) for bar in bars] == [
+        ("2026-05-26", "09:30"), ("2026-05-26", "13:30"), ("2026-05-27", "09:30"), ("2026-05-27", "13:30"),
+    ]
+    first, second = bars[0], bars[1]
+    assert first["open"] == pytest.approx(100 * 0.98) and first["close"] == pytest.approx(103.5 * 0.98)
+    assert first["high"] == pytest.approx(104 * 0.98) and first["volume"] == 40
+    # The afternoon candle runs to the close, including Yahoo's 16:00 closing print.
+    assert second["low"] == pytest.approx(103 * 0.98) and second["close"] == pytest.approx(107.5 * 0.98) and second["volume"] == 40
+    assert bars[2]["open"] == pytest.approx(108)
