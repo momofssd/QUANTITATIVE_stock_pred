@@ -7,6 +7,12 @@ line, and each zone ships with a replay of what price did after earlier visits.
 Short-term deviation: (close - prior EMA20) / prior ATR14, so a zone is a
 stretch measured in the ticker's own volatility units.
 
+Momentum: (EMA5 - EMA13) / ATR14, the speed of the recent move in ATR units.
+Negative is bearish, positive bullish. Whether it is building or fading is read
+from the EMA spread itself, so a quiet session (shrinking ATR) cannot make a
+stalled decline look like it is accelerating. A zone says where price is stretched; the
+momentum turn says when the move into it has lost force.
+
 Every level is causal: the band that applies to a session is computed from
 data through the previous close, so the historical replay never sees the
 session it is grading.
@@ -30,6 +36,19 @@ BOUNCE_ATR = 1.5
 RECENT_TOUCH_SESSIONS = 3
 SWING_WINDOW = 5
 BREAKDOWN_ACTIVE_SESSIONS = 5
+MOMENTUM_FAST, MOMENTUM_SLOW = 5, 13
+# A bottom (top) signal: within SIGNAL_TOUCH_SESSIONS of a buy (take-profit) zone touch, momentum is still
+# bearish (bullish) but has moved against the trend for MOMENTUM_TURN_SESSIONS sessions in a row.
+MOMENTUM_TURN_SESSIONS = 2
+SIGNAL_TOUCH_SESSIONS = 5
+SIGNAL_ACTIVE_SESSIONS = 3
+MOMENTUM_EXTREME_SESSIONS = 10
+# The signal's stop sits STOP_BUFFER_ATR beyond the interim low (high) of the last INTERIM_SESSIONS,
+# at least MIN_RISK_ATR from the entry; the target is TARGET_R times that risk.
+INTERIM_SESSIONS = 6
+STOP_BUFFER_ATR = 0.25
+MIN_RISK_ATR = 0.5
+TARGET_R = 2.0
 
 ZONE_KEYS = ("st_buy", "st_sell")
 
@@ -69,6 +88,12 @@ def compute_zone_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
     frame["ma50"] = close.rolling(50, min_periods=50).mean()
     frame["ma200"] = close.rolling(200, min_periods=200).mean()
     frame["st_dev"] = (close - frame["ema20"].shift()) / frame["atr"].shift()
+    frame["ema_fast"] = close.ewm(span=MOMENTUM_FAST, adjust=False, min_periods=MOMENTUM_FAST).mean()
+    frame["ema_slow"] = close.ewm(span=MOMENTUM_SLOW, adjust=False, min_periods=MOMENTUM_SLOW).mean()
+    spread = frame["ema_fast"] - frame["ema_slow"]
+    frame["momentum"] = spread / frame["atr"]
+    # Daily change of the spread, expressed in today's ATRs for display; its sign is price-only.
+    frame["momentum_change"] = spread.diff() / frame["atr"]
 
     for key, pctls in (("st_buy", SHORT_TERM_BUY_PCTL), ("st_sell", SHORT_TERM_SELL_PCTL)):
         for edge, level in zip(("low", "high"), pctls):
@@ -255,43 +280,249 @@ def reversion_study(
     }
 
 
-def confirmation_study(ohlc: pd.DataFrame, zones: pd.DataFrame, baseline_rate: float | None, horizon: int = SHORT_TERM_HORIZON) -> dict:
-    """Replay the 'wait for the turn' entry: buy at the close of the first session
-    that closes above the prior session's high within RECENT_TOUCH_SESSIONS of a
-    buy-zone touch, then grade the same symmetric ATR bracket.
+def _run_length(flags: pd.Series) -> pd.Series:
+    """Consecutive True values ending at each session."""
+    return flags.astype(int).groupby((~flags).cumsum()).cumsum()
+
+
+def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
+    """Per-session momentum-exhaustion state, all known at that session's close.
+
+    buy_signal: the session on which, within SIGNAL_TOUCH_SESSIONS of a buy-zone touch, momentum is
+    still negative but has risen for exactly MOMENTUM_TURN_SESSIONS sessions: the selling is losing force.
+    sell_signal mirrors it at the take-profit zone. buy/sell stop and target are the levels an entry at
+    that session's close would use: beyond the interim low (high) of the last INTERIM_SESSIONS, and
+    TARGET_R times that risk.
     """
-    highs, lows, closes = (ohlc[column].to_numpy() for column in ("high", "low", "close"))
+    momentum = zones["momentum"]
+    change = zones["momentum_change"]
+    rising, falling = _run_length(change > 0), _run_length(change < 0)
+    touched_buy = (ohlc["low"] <= zones["st_buy_high"]).astype(float).rolling(SIGNAL_TOUCH_SESSIONS, min_periods=1).max()
+    touched_sell = (ohlc["high"] >= zones["st_sell_low"]).astype(float).rolling(SIGNAL_TOUCH_SESSIONS, min_periods=1).max()
+    close, atr = ohlc["close"], zones["atr"]
+    interim_low = ohlc["low"].rolling(INTERIM_SESSIONS, min_periods=1).min()
+    interim_high = ohlc["high"].rolling(INTERIM_SESSIONS, min_periods=1).max()
+    buy_stop = np.minimum(interim_low - STOP_BUFFER_ATR * atr, close - MIN_RISK_ATR * atr)
+    sell_stop = np.maximum(interim_high + STOP_BUFFER_ATR * atr, close + MIN_RISK_ATR * atr)
+    return pd.DataFrame(
+        {
+            "momentum": momentum,
+            "change": change,
+            "rising_sessions": rising,
+            "falling_sessions": falling,
+            "touched_buy": touched_buy > 0,
+            "touched_sell": touched_sell > 0,
+            "buy_signal": (touched_buy > 0) & (momentum < 0) & (rising == MOMENTUM_TURN_SESSIONS),
+            "sell_signal": (touched_sell > 0) & (momentum > 0) & (falling == MOMENTUM_TURN_SESSIONS),
+            "interim_low": interim_low,
+            "interim_high": interim_high,
+            "buy_stop": buy_stop,
+            "buy_target": close + TARGET_R * (close - buy_stop),
+            "sell_stop": sell_stop,
+            "sell_target": close - TARGET_R * (sell_stop - close),
+        },
+        index=ohlc.index,
+    )
+
+
+def momentum_pivot(zones: pd.DataFrame) -> float | None:
+    """Next-session close at which the EMA spread, and so the momentum direction, is unchanged.
+
+    Both EMAs move linearly with the close, so a close above this price makes momentum
+    rise and a close below makes it fall.
+    """
+    last = zones.iloc[-1]
+    fast, slow = 2 / (MOMENTUM_FAST + 1), 2 / (MOMENTUM_SLOW + 1)
+    value = (fast * last["ema_fast"] - slow * last["ema_slow"]) / (fast - slow)
+    return float(value) if np.isfinite(value) else None
+
+
+def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame) -> dict:
+    """Where momentum stands after the latest close, and the most recent bottom or top signal."""
+    frame = momentum_frame(ohlc, zones)
+    last = frame.iloc[-1]
+    value, change = float(last["momentum"]), float(last["change"])
+    if value < 0:
+        phase = "BEARISH_FADING" if change > 0 else "BEARISH_BUILDING"
+    else:
+        phase = "BULLISH_FADING" if change < 0 else "BULLISH_BUILDING"
+    # Share of the recent extreme (same sign as today) that has already worn off, measured on the EMA
+    # spread like the turn itself, then shown in today's ATRs so it sits on the same scale as the value.
+    spread = (zones["ema_fast"] - zones["ema_slow"]).tail(MOMENTUM_EXTREME_SESSIONS)
+    extreme_spread = float(spread.min() if value < 0 else spread.max())
+    today_spread = float(spread.iloc[-1])
+    same_side = extreme_spread != 0 and np.sign(extreme_spread) == np.sign(today_spread)
+    faded = min(max(1 - today_spread / extreme_spread, 0.0), 1.0) if same_side else 0.0
+    extreme = extreme_spread / float(zones["atr"].iloc[-1])
+    close = float(ohlc["close"].iloc[-1])
+    signal, signal_index = None, -1
+    for side in ("buy", "sell"):
+        hits = np.flatnonzero(frame[f"{side}_signal"].to_numpy()[-SIGNAL_ACTIVE_SESSIONS:])
+        if not hits.size:
+            continue
+        i = len(frame) - SIGNAL_ACTIVE_SESSIONS + int(hits[-1])
+        if i <= signal_index:
+            continue
+        stop, target = float(frame[f"{side}_stop"].iloc[i]), float(frame[f"{side}_target"].iloc[i])
+        favorable = (target - close) if side == "buy" else (close - target)
+        adverse = (close - stop) if side == "buy" else (stop - close)
+        reward_risk = favorable / adverse if adverse > 0 and favorable > 0 else None
+        signal_index = i
+        signal = {
+            "side": side,
+            "date": str(ohlc.index[i].date()),
+            "sessions_ago": len(frame) - 1 - i,
+            "entry": clean_float(ohlc["close"].iloc[i], 2),
+            "stop": clean_float(stop, 2),
+            "target": clean_float(target, 2),
+            "reward_risk_now": clean_float(reward_risk, 2),
+            # Still actionable while at least 1:1 remains from today's close.
+            "active": reward_risk is not None and reward_risk >= 1.0,
+        }
+    return {
+        "value_atr": clean_float(value, 2),
+        "change_atr": clean_float(change, 3),
+        "percentile": clean_float(percentile_rank(frame["momentum"], SHORT_TERM_LOOKBACK)),
+        "phase": phase,
+        "rising_sessions": int(last["rising_sessions"]),
+        "falling_sessions": int(last["falling_sessions"]),
+        "recent_extreme_atr": clean_float(extreme, 2),
+        "faded_from_extreme": clean_float(faded),
+        "pivot_price": clean_float(momentum_pivot(zones), 2),
+        "interim_low": clean_float(last["interim_low"], 2),
+        "interim_high": clean_float(last["interim_high"], 2),
+        "touched_buy_zone": bool(last["touched_buy"]),
+        "touched_sell_zone": bool(last["touched_sell"]),
+        "touch_window_sessions": SIGNAL_TOUCH_SESSIONS,
+        "turn_sessions_required": MOMENTUM_TURN_SESSIONS,
+        "signal": signal,
+        "definition": (
+            f"Momentum = (EMA{MOMENTUM_FAST} - EMA{MOMENTUM_SLOW}) / ATR14: how fast price has been moving, in ATRs. "
+            "Below 0 is bearish, above 0 bullish. Fading = moving back toward 0. "
+            f"A bottom signal needs a buy-zone touch within {SIGNAL_TOUCH_SESSIONS} sessions and bearish momentum that "
+            f"has faded for {MOMENTUM_TURN_SESSIONS} sessions in a row; a top signal mirrors it at the take-profit zone."
+        ),
+    }
+
+
+def _trade_r(
+    opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+    i: int, horizon: int, stop: float, target: float, side: str,
+) -> tuple[str, float | None, int | None]:
+    """Grade an entry at session i's close in R (multiples of the planned risk). A gap through the stop exits at the open."""
+    outcome, target_day, *_ = _bracket(highs, lows, i, horizon, target, stop, side, False)
+    entry, sign = closes[i], 1 if side == "buy" else -1
+    risk = abs(entry - stop)
+    end = min(i + horizon, len(closes) - 1)
+    if outcome == "success":
+        return outcome, abs(target - entry) / risk, target_day
+    if outcome == "failed":
+        hit = lows[i + 1:end + 1] <= stop if side == "buy" else highs[i + 1:end + 1] >= stop
+        day = i + 1 + int(np.flatnonzero(hit)[0])
+        fill = min(opens[day], stop) if side == "buy" else max(opens[day], stop)
+        return outcome, sign * (fill - entry) / risk, None
+    if outcome == "expired":
+        return outcome, sign * (closes[end] - entry) / risk, None
+    return outcome, None, None
+
+
+def momentum_signal_study(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon: int = SHORT_TERM_HORIZON) -> dict:
+    """Replay every earlier bottom (buy) or top (sell) signal as the trade the dashboard proposes.
+
+    Entry is the signal session's close, the stop sits beyond the interim low (high), and the
+    target is TARGET_R times the risk; each trade ends at the target, the stop, or after `horizon`
+    sessions. The baseline makes the same trade from every session's close, so the edge shows
+    whether waiting for momentum to fade beat entering on an arbitrary day. "Held" = the interim
+    low (high) was not broken within `horizon` sessions, i.e. the signal caught a real turn.
+    """
+    frame = momentum_frame(ohlc, zones)
+    opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
+    stops, targets = frame[f"{side}_stop"].to_numpy(), frame[f"{side}_target"].to_numpy()
+    interim = frame["interim_low" if side == "buy" else "interim_high"].to_numpy()
     atr = zones["atr"].to_numpy()
-    band_high = zones["st_buy_high"].to_numpy()
-    touched = np.isfinite(band_high) & (lows <= band_high)
-    recent_touch = pd.Series(touched).rolling(RECENT_TOUCH_SESSIONS, min_periods=1).max().astype(bool).to_numpy()
-    reclaim = np.concatenate([[False], closes[1:] > highs[:-1]])
-    results: list[dict] = []
-    last = -RECENT_TOUCH_SESSIONS - 1
-    for i in np.flatnonzero(recent_touch & reclaim & np.isfinite(atr)):
-        if i - last <= RECENT_TOUCH_SESSIONS:
+    trend_up = (ohlc["close"] > zones["ma200"]).to_numpy()
+    band = zones["st_buy_high" if side == "buy" else "st_sell_low"].to_numpy()
+    n = len(closes)
+
+    def held(i: int) -> bool:
+        window = slice(i + 1, i + 1 + horizon)
+        return bool(lows[window].min() > interim[i]) if side == "buy" else bool(highs[window].max() < interim[i])
+
+    episodes: list[dict] = []
+    last = -SIGNAL_TOUCH_SESSIONS - 1
+    for i in np.flatnonzero(frame[f"{side}_signal"].to_numpy()):
+        if i - last <= SIGNAL_TOUCH_SESSIONS:
             continue
         last = i
-        entry = closes[i]
-        outcome, _, favorable, _ = _bracket(
-            highs, lows, int(i), horizon, entry + BOUNCE_ATR * atr[i], entry - BOUNCE_ATR * atr[i], "buy", False,
+        outcome, r, target_day = _trade_r(opens, highs, lows, closes, int(i), horizon, stops[i], targets[i], side)
+        complete = outcome != "pending"
+        # How much further price went against the entry before the window closed; graded trades only.
+        window = slice(i + 1, i + 1 + horizon)
+        further = None
+        if complete:
+            further = (closes[i] - lows[window].min()) if side == "buy" else (highs[window].max() - closes[i])
+        episodes.append(
+            {
+                "index": int(i),
+                "date": str(ohlc.index[i].date()),
+                "entry": float(closes[i]),
+                "stop": float(stops[i]),
+                "target": float(targets[i]),
+                "interim_extreme": float(interim[i]),
+                "momentum": float(frame["momentum"].iloc[i]),
+                "outcome": outcome,
+                "success": outcome == "success",
+                "complete": complete,
+                "trend_up": bool(trend_up[i]),
+                "r_multiple": r,
+                "held": held(int(i)) if complete else None,
+                "further_move_atr": float(further / atr[i]) if further is not None else None,
+                "days_to_target": target_day,
+            }
         )
-        if outcome != "pending":
-            results.append({"success": outcome == "success", "favorable_move": float(favorable.max() / entry - 1) if favorable.size else 0.0})
-    success_rate = _rate([row["success"] for row in results])
+    baseline_r, baseline_held = [], []
+    for i in np.flatnonzero(np.isfinite(band) & np.isfinite(stops) & np.isfinite(atr)):
+        if i + horizon > n - 1:
+            break
+        baseline_r.append(_trade_r(opens, highs, lows, closes, int(i), horizon, stops[i], targets[i], side)[1])
+        baseline_held.append(held(int(i)))
+    graded = [episode for episode in episodes if episode["complete"]]
+    results = [episode["r_multiple"] for episode in graded]
+    expectancy = float(np.mean(results)) if results else None
+    baseline_expectancy = float(np.mean(baseline_r)) if baseline_r else None
+    current_trend_up = bool(ohlc["close"].iloc[-1] > zones["ma200"].iloc[-1])
+    extreme = "low" if side == "buy" else "high"
     return {
-        "episodes": len(results),
-        "sufficient_sample": len(results) >= MIN_EPISODES,
-        "success_rate": clean_float(success_rate),
-        "baseline_success_rate": clean_float(baseline_rate),
-        "edge_vs_baseline": (
-            clean_float(success_rate - baseline_rate) if success_rate is not None and baseline_rate is not None else None
+        "side": side,
+        "horizon_sessions": horizon,
+        "target_r": TARGET_R,
+        "episodes": len(graded),
+        "sufficient_sample": len(graded) >= MIN_EPISODES,
+        "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
+        "stop_rate": clean_float(_rate([episode["outcome"] == "failed" for episode in graded])),
+        "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
+        "expectancy_r": clean_float(expectancy, 2),
+        "median_r": clean_float(_median(results), 2),
+        "baseline_expectancy_r": clean_float(baseline_expectancy, 2),
+        "edge_r": (
+            clean_float(expectancy - baseline_expectancy, 2) if expectancy is not None and baseline_expectancy is not None else None
         ),
-        "median_favorable_move": clean_float(_median([row["favorable_move"] for row in results])),
+        "held_rate": clean_float(_rate([episode["held"] for episode in graded])),
+        "baseline_held_rate": clean_float(_rate(baseline_held)),
+        "median_further_move_atr": clean_float(_median([episode["further_move_atr"] for episode in graded]), 2),
+        "median_days_to_target": clean_float(
+            _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
+        ),
+        "by_trend": _summarize_context(episodes, current_trend_up),
         "definition": (
-            f"Buy at the close of the first session that closes above the prior high within {RECENT_TOUCH_SESSIONS} sessions "
-            f"of a buy-zone touch; same {BOUNCE_ATR:g} ATR bracket over {horizon} sessions."
+            f"Signal = within {SIGNAL_TOUCH_SESSIONS} sessions of a {'buy' if side == 'buy' else 'take-profit'}-zone touch, "
+            f"momentum {'rose' if side == 'buy' else 'fell'} {MOMENTUM_TURN_SESSIONS} sessions in a row while still "
+            f"{'bearish' if side == 'buy' else 'bullish'}. Entry at that close; stop {STOP_BUFFER_ATR:g} ATR beyond the "
+            f"{INTERIM_SESSIONS}-session {extreme}; target {TARGET_R:g}x the risk; otherwise exit after {horizon} sessions. "
+            f"Results are in R (multiples of the risk). Held = the interim {extreme} was not broken within {horizon} sessions. "
+            "Baseline = the same trade from every session's close."
         ),
+        "recent_episodes": episodes,
     }
 
 
@@ -467,6 +698,8 @@ def bounce_readiness(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
     rsi_14 = float(rsi_14_series.iloc[-1]) if np.isfinite(rsi_14_series.iloc[-1]) else 50.0
     rsi_2_series = _rsi(ohlc["close"], 2)
     rsi_2 = float(rsi_2_series.iloc[-1]) if np.isfinite(rsi_2_series.iloc[-1]) else 50.0
+    momentum = float(zones["momentum"].iloc[-1])
+    momentum_change = float(zones["momentum_change"].iloc[-1])
     volume_ratio = (ohlc["volume"] / ohlc["volume"].rolling(20, min_periods=20).mean()).tail(RECENT_TOUCH_SESSIONS)
     peak_volume_ratio = float(volume_ratio.max()) if volume_ratio.notna().any() else 0.0
     stretch_pctl = percentile_rank(zones["st_dev"], SHORT_TERM_LOOKBACK)
@@ -494,6 +727,16 @@ def bounce_readiness(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
             "label": "Momentum oversold",
             "passed": rsi_14 <= 35 or rsi_2 <= 10,
             "detail": f"RSI(14) {rsi_14:.1f}, RSI(2) {rsi_2:.1f}",
+        },
+        {
+            "key": "momentum_fading",
+            "label": "Bearish momentum fading",
+            "passed": momentum < 0 and momentum_change > 0,
+            "detail": (
+                f"Momentum {momentum:+.2f} ATR, "
+                + ("bullish" if momentum >= 0 else "rising" if momentum_change > 0 else "still falling")
+                + f" ({momentum_change:+.2f} today)"
+            ),
         },
         {
             "key": "capitulation_volume",

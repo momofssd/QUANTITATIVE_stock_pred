@@ -1,4 +1,4 @@
-import { dollar, fixed, isNumber, ordinal, percent, points, range, signedPercent, zonePosition } from "./format";
+import { dollar, fixed, isNumber, ordinal, percent, points, range, signedPercent, signedR, zonePosition } from "./format";
 
 const STAGE_LABELS = {
   CONFIRMED: "Bounce confirmed",
@@ -73,24 +73,104 @@ function PercentileGauge({ label, valueLabel, percentile, buyBand, sellBand, sel
   );
 }
 
+const PHASE_LABELS = {
+  BEARISH_BUILDING: "Bearish, still building",
+  BEARISH_FADING: "Bearish, fading",
+  BULLISH_BUILDING: "Bullish, still building",
+  BULLISH_FADING: "Bullish, fading",
+};
+
+const SELL_ACTIONS = new Set(["TOP_SIGNAL", "TOP_FORMING", "TAKE_PROFIT_ZONE"]);
+// The momentum gauge spans ±3 ATR; stronger readings pin to the edge.
+const MOMENTUM_SCALE = 3;
+
+function momentumStreak(momentum) {
+  const rising = momentum.rising_sessions;
+  const falling = momentum.falling_sessions;
+  if (rising) return `rising ${rising} session${rising > 1 ? "s" : ""}`;
+  if (falling) return `falling ${falling} session${falling > 1 ? "s" : ""}`;
+  return "flat";
+}
+
+// Centered bar: left of zero is bearish, right is bullish; the faint tick is the recent extreme.
+function MomentumGauge({ momentum }) {
+  const position = (value) => 50 + (Math.max(-MOMENTUM_SCALE, Math.min(MOMENTUM_SCALE, value)) / MOMENTUM_SCALE) * 50;
+  const value = momentum.value_atr;
+  const bearish = momentum.phase.startsWith("BEARISH");
+  const fill = isNumber(value) ? { left: `${Math.min(50, position(value))}%`, width: `${Math.abs(position(value) - 50)}%` } : null;
+  const pivotDirection = bearish ? "above" : "below";
+  const pivotEffect = bearish ? "turns it up" : "turns it down";
+  return (
+    <div className="gauge momentum-gauge">
+      <div className="gauge-head">
+        <span>Momentum (EMA5 − EMA13, in ATRs)</span>
+        <strong>
+          {isNumber(value) ? `${value > 0 ? "+" : ""}${fixed(value, 2)} ATR` : "-"} · {PHASE_LABELS[momentum.phase]}
+        </strong>
+      </div>
+      <div className="gauge-track momentum-track" role="img" aria-label={`Momentum ${fixed(value, 2)} ATR, ${PHASE_LABELS[momentum.phase]}`}>
+        {fill && <i className={`momentum-fill ${bearish ? "bear" : "bull"}`} style={fill} />}
+        {isNumber(momentum.recent_extreme_atr) && (
+          <i className="momentum-extreme" style={{ left: `${position(momentum.recent_extreme_atr)}%` }} title="10-session extreme" />
+        )}
+        <i className="momentum-zero" />
+        {isNumber(value) && <b className="gauge-marker" style={{ left: `${position(value)}%` }} />}
+      </div>
+      <div className="gauge-scale">
+        <span>Strong selling</span>
+        <span>0</span>
+        <span>Strong buying</span>
+      </div>
+      <p className="momentum-note">
+        {momentumStreak(momentum)} · {percent(momentum.faded_from_extreme, 0)} faded from its 10-session extreme
+        {isNumber(momentum.pivot_price) && (
+          <>
+            {" "}· a close {pivotDirection} <strong>{dollar(momentum.pivot_price)}</strong> next session {pivotEffect}
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+function SignalCallout({ signal }) {
+  if (!signal) return null;
+  const buy = signal.side === "buy";
+  return (
+    <div className={`signal-callout ${buy ? "buy" : "sell"}${signal.active ? "" : " stale"}`}>
+      <strong>
+        {buy ? "Bottom signal" : "Top signal"} {signal.date}
+        {signal.sessions_ago ? ` (${signal.sessions_ago} session${signal.sessions_ago > 1 ? "s" : ""} ago)` : " (today)"}
+      </strong>
+      <span>
+        {buy ? "Entry" : "Exit"} {dollar(signal.entry)} · {buy ? "stop under the interim low" : "fails above the interim high"}{" "}
+        {dollar(signal.stop)} · target {dollar(signal.target)} ·{" "}
+        {signal.active ? `${fixed(signal.reward_risk_now, 1)}:1 left from today` : "most of the move is already done"}
+      </span>
+    </div>
+  );
+}
+
 export function ShortTermHero({ shortTerm, market }) {
   const history = shortTerm.history;
-  const touch = history.buy_zone;
-  const confirmed = history.confirmed_entry;
-  const readiness = shortTerm.bounce_readiness;
+  const momentum = shortTerm.momentum;
   const edge = shortTerm.historical_edge;
   const breakdown = shortTerm.breakdown?.active ? shortTerm.breakdown : null;
+  const sellSide = SELL_ACTIONS.has(shortTerm.action);
   const [edgeTone, edgeLabel] = breakdown ? BREAKDOWN_EDGE[edge.grade] : [EDGE_TONE[edge.grade], edge.label];
+  const touch = history.buy_zone;
   return (
     <section className={`hero-card ${shortTerm.tone}`}>
       <div className="hero-head">
         <p className="eyebrow">
-          Short-term entry · {shortTerm.horizon_sessions}-session {breakdown ? "support breakdown" : "V-bounce"}
+          Short-term · {shortTerm.horizon_sessions}-session{" "}
+          {breakdown ? "support breakdown" : sellSide ? "interim top" : "interim bottom"}
         </p>
         <span className={`chip ${edgeTone}`}>{edgeLabel}</span>
       </div>
       <h2>{shortTerm.action_label}</h2>
       <p className="summary">{shortTerm.action_definition}</p>
+      <SignalCallout signal={momentum.signal} />
       <div className="hero-facts">
         <Fact
           detail={`${signedPercent(market.change_pct)} today · ${market.trend.toLowerCase()}`}
@@ -107,12 +187,13 @@ export function ShortTermHero({ shortTerm, market }) {
           />
         ) : (
           <Fact
-            detail={`${readiness.score} of ${readiness.max_score} checklist items met`}
-            label="Bounce readiness"
-            value={STAGE_LABELS[readiness.stage]}
+            detail={sellSide ? "the top fails above this" : "the bottom fails below this"}
+            label={sellSide ? "Interim high (6 sessions)" : "Interim low (6 sessions)"}
+            value={dollar(sellSide ? momentum.interim_high : momentum.interim_low)}
           />
         )}
       </div>
+      <MomentumGauge momentum={momentum} />
       <PercentileGauge
         buyBand={shortTerm.buy_zone.percentile_band}
         label="Stretch from the 20-day EMA, vs. the last 3 years"
@@ -124,39 +205,41 @@ export function ShortTermHero({ shortTerm, market }) {
       {breakdown ? (
         <BreakdownStats breakdown={breakdown} study={history.breakdown} />
       ) : (
-        <BounceStats confirmed={confirmed} touch={touch} />
+        <SignalStats side={sellSide ? "sell" : "buy"} study={sellSide ? history.momentum_top : history.momentum_bottom} />
       )}
       <p className="footnote">
         {breakdown
           ? `A breakdown kept falling when price dropped another ${touch.bracket_atr} ATR before rising ${touch.bracket_atr} ATR within ${touch.horizon_sessions} sessions. Compare the rate with the any-day baseline, not with 100%.`
-          : `A bounce means price rose ${touch.bracket_atr} ATR before falling ${touch.bracket_atr} ATR within ${touch.horizon_sessions} sessions, so about 50% is break-even. Compare each rate with the any-day baseline, not with 100%.`}
+          : `Each past signal is replayed as the trade shown here: stop beyond the interim ${sellSide ? "high" : "low"}, target ${history.momentum_bottom.target_r}x the risk, exit after ${history.momentum_bottom.horizon_sessions} sessions otherwise. R = profit or loss as a multiple of the amount risked. Compare with the same trade on any day, not with zero.`}
       </p>
     </section>
   );
 }
 
-function BounceStats({ touch, confirmed }) {
+function SignalStats({ side, study }) {
+  const kind = side === "buy" ? "bottom" : "top";
+  const extreme = side === "buy" ? "low" : "high";
   return (
     <div className="hero-stats">
       <Stat
-        detail={`vs ${percent(touch.baseline_success_rate, 0)} on any day · ${touch.episodes} touches`}
-        label="Bounce rate buying at the zone"
-        value={percent(touch.success_rate, 0)}
+        detail={`vs ${signedR(study.baseline_expectancy_r)} on any day · ${study.episodes} signals`}
+        label={`Average result of past ${kind} signals`}
+        value={signedR(study.expectancy_r)}
       />
       <Stat
-        detail={`${points(confirmed.edge_vs_baseline)} vs any day · ${confirmed.episodes} setups`}
-        label="Bounce rate waiting for a reversal close"
-        value={percent(confirmed.success_rate, 0)}
+        detail={`vs ${percent(study.baseline_held_rate, 0)} on any day`}
+        label={`Interim ${extreme} held for ${study.horizon_sessions} sessions`}
+        value={percent(study.held_rate, 0)}
       />
       <Stat
-        detail={`worst dip ${signedPercent(touch.median_adverse_move)} (median)`}
-        label="Median best bounce"
-        value={signedPercent(touch.median_favorable_move)}
+        detail={`${percent(study.stop_rate, 0)} stopped · the rest exited after ${study.horizon_sessions} sessions`}
+        label={`Reached the ${study.target_r}R target`}
+        value={percent(study.success_rate, 0)}
       />
       <Stat
-        detail={`target hit in ${fixed(touch.median_days_to_target, 0)} sessions when it worked`}
-        label="Sessions to the low (median)"
-        value={fixed(touch.median_days_to_extreme, 0)}
+        detail={`median, in ATRs, after the signal`}
+        label={side === "buy" ? "Further dip after buying" : "Further rise after selling"}
+        value={fixed(study.median_further_move_atr, 2)}
       />
     </div>
   );
@@ -202,6 +285,14 @@ export function LevelLadder({ report }) {
   const breakdown = shortTerm.breakdown;
   if (breakdown?.active) levels.push({ key: "broken", label: "Broken support (reclaim level)", price: breakdown.broken_level, kind: "line broken" });
   if (breakdown) levels.push({ key: "support", label: "Next swing-low support", price: breakdown.next_support, kind: "line support" });
+  const momentum = shortTerm.momentum;
+  levels.push({ key: "pivot", label: "Momentum pivot (a close above lifts momentum)", price: momentum.pivot_price, kind: "line pivot" });
+  if (momentum.touched_buy_zone) levels.push({ key: "interim_low", label: "Interim low (bottom fails below)", price: momentum.interim_low, kind: "line support" });
+  if (momentum.touched_sell_zone) levels.push({ key: "interim_high", label: "Interim high (top fails above)", price: momentum.interim_high, kind: "line broken" });
+  if (momentum.signal?.active) {
+    const buy = momentum.signal.side === "buy";
+    levels.push({ key: "signal_target", label: `${buy ? "Bottom" : "Top"} signal target`, price: momentum.signal.target, kind: "line pivot" });
+  }
   const middle = (level) => (level.zone ? (level.zone.low + level.zone.high) / 2 : level.price);
   const ordered = levels.filter((level) => isNumber(middle(level))).sort((left, right) => middle(right) - middle(left));
   const distance = (level) => {
@@ -282,7 +373,7 @@ export function TradePlanPanel({ shortTerm }) {
       <Row detail={plan.stop_basis} label="Stop" value={dollar(plan.stop_loss)} />
       <Row detail={plan.target_1_basis} label="Target 1" value={`${dollar(plan.target_1)} · ${fixed(plan.reward_risk_target_1, 1)}R`} />
       <Row detail={plan.target_2_basis} label="Target 2" value={`${dollar(plan.target_2)} · ${fixed(plan.reward_risk_target_2, 1)}R`} />
-      <Row detail="where a V-bounce usually reverts to" label="20-day EMA" value={dollar(plan.mean_reversion_level)} />
+      <Row detail="where a bounce usually reverts to" label="20-day EMA" value={dollar(plan.mean_reversion_level)} />
     </article>
   );
 }
@@ -331,7 +422,6 @@ export function EvidenceTables({ shortTerm }) {
   const st = shortTerm.history;
   const shortRows = [
     { label: "Buy zone, first touch", study: st.buy_zone, context: true },
-    { label: "Buy zone, wait for reversal close", study: st.confirmed_entry },
     { label: "Take-profit zone, first touch", study: st.sell_zone, context: true },
     { label: "Close below swing-low support (worked = kept falling)", study: st.breakdown, context: true },
   ].filter((row) => row.study);
@@ -373,7 +463,76 @@ export function EvidenceTables({ shortTerm }) {
           ))}
         </tbody>
       </table>
+      <MomentumSignalTable bottom={st.momentum_bottom} top={st.momentum_top} />
     </section>
+  );
+}
+
+// Column definitions, rendered as header tooltips and as the list under the table.
+function signalColumns(study) {
+  return [
+    ["Signals", `Completed past signals. A signal needs a zone touch within 5 sessions and momentum turning against the move for 2 sessions in a row.`],
+    ["Average R", "Average result per trade in R, where 1R is the amount risked (entry to stop). +1R gained that amount; −1R lost it."],
+    ["Median R", "The middle result. When it is far below the average, a few big winners carry the average."],
+    ["Any day", "Average R of the same trade (stop beyond the 6-session extreme, same target) taken at every session's close."],
+    ["Edge", "Average R minus Any day: what waiting for momentum to fade earned per trade. Positive (green) beat entering on any day."],
+    ["Hit target", `Share of trades that reached the ${study.target_r}R target before the stop.`],
+    ["Stopped", `Share that hit the stop first. The rest closed at the price after ${study.horizon_sessions} sessions.`],
+    ["Held", `How often the interim low (high) before the signal was not broken within ${study.horizon_sessions} sessions: the signal caught a real turn.`],
+    ["Any day held", "The same check from every session, for comparison."],
+    ["Current trend context", "Hit-target rate for signals made on the same side of the 200-day MA as today, with the count."],
+  ];
+}
+
+function MomentumSignalTable({ bottom, top }) {
+  const columns = signalColumns(bottom);
+  const rows = [
+    ["Bottom signal: bearish momentum faded (buy)", bottom],
+    ["Top signal: bullish momentum faded (sell)", top],
+  ];
+  return (
+    <>
+      <h3>
+        Momentum signals: stop beyond the interim low or high, {bottom.target_r}R target, exit after {bottom.horizon_sessions} sessions
+      </h3>
+      <table className="evidence-table">
+        <thead>
+          <tr>
+            <th scope="col">Signal</th>
+            {columns.map(([name, definition]) => (
+              <th key={name} scope="col" title={definition}>
+                {name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, study]) => (
+            <tr key={label}>
+              <th scope="row">{label}</th>
+              <td>{study.episodes}</td>
+              <td>{signedR(study.expectancy_r)}</td>
+              <td>{signedR(study.median_r)}</td>
+              <td>{signedR(study.baseline_expectancy_r)}</td>
+              <td className={isNumber(study.edge_r) ? (study.edge_r > 0 ? "good" : "bad") : ""}>{signedR(study.edge_r)}</td>
+              <td>{percent(study.success_rate, 0)}</td>
+              <td>{percent(study.stop_rate, 0)}</td>
+              <td>{percent(study.held_rate, 0)}</td>
+              <td>{percent(study.baseline_held_rate, 0)}</td>
+              <td>{contextRate(study)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <dl className="column-definitions">
+        {columns.map(([name, definition]) => (
+          <div key={name}>
+            <dt>{name}</dt>
+            <dd>{definition}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }
 

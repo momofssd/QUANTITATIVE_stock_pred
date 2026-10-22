@@ -45,9 +45,20 @@ const ZONES = [
   { key: "st_sell", label: "ST take-profit", kind: "sell", term: "short" },
 ];
 
-const TOUCH_LABELS = { st_buy: "Buy-zone touch", st_sell: "Sell-zone touch" };
+const TOUCH_LABELS = {
+  st_buy: "Buy-zone touch",
+  st_sell: "Sell-zone touch",
+  mom_buy: "Bottom signal (bearish momentum faded)",
+  mom_sell: "Top signal (bullish momentum faded)",
+};
 
 function outcomeText(zone, outcome) {
+  if (zone === "mom_buy" || zone === "mom_sell") {
+    if (outcome === "success") return "reached the 2R target before the stop";
+    if (outcome === "failed") return zone === "mom_buy" ? "broke the interim low (stop) first" : "broke the interim high (stop) first";
+    if (outcome === "expired") return "neither level within 10 sessions";
+    return "still open";
+  }
   if (outcome === "success") return zone === "st_buy" ? "bounced 1.5 ATR before dropping 1.5 ATR" : "pulled back 1.5 ATR before extending 1.5 ATR";
   if (outcome === "failed") return zone === "st_buy" ? "dropped 1.5 ATR first" : "extended 1.5 ATR higher first";
   if (outcome === "expired") return "no decision within 10 sessions";
@@ -157,6 +168,15 @@ function spreadLabels(labels, minimumGap, top, bottom) {
   return arranged;
 }
 
+function Diamond({ x, y, className, title }) {
+  const size = 5.5;
+  return (
+    <polygon className={className} points={`${x},${y - size} ${x + size},${y} ${x},${y + size} ${x - size},${y}`}>
+      <title>{title}</title>
+    </polygon>
+  );
+}
+
 function Triangle({ x, y, up, className, title }) {
   const size = 5;
   const points = up
@@ -174,8 +194,8 @@ export default function MarketChart({ chart, shortTerm }) {
   const [view, setView] = useState({ range: 126, offset: 0 });
   const [priceHeight, setPriceHeight] = useState(DEFAULT_PRICE_HEIGHT);
   const [dragging, setDragging] = useState(false);
-  const [lowerStudy, setLowerStudy] = useState("STRETCH");
-  const [layers, setLayers] = useState({ short: true, shortTouches: true });
+  const [lowerStudy, setLowerStudy] = useState("MOMENTUM");
+  const [layers, setLayers] = useState({ short: true, shortTouches: true, momentum: true });
   const [activeIndex, setActiveIndex] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
@@ -317,7 +337,12 @@ export default function MarketChart({ chart, shortTerm }) {
 
   let lowerY;
   let lowerTicks = [];
-  if (lowerStudy === "STRETCH") {
+  if (lowerStudy === "MOMENTUM") {
+    const values = visiblePoints.map((point) => point.momentum).filter(valid);
+    const bound = Math.max(Math.min(Math.max(...values.map(Math.abs), 1), 6), 1);
+    lowerY = (value) => LOWER_TOP + ((bound - Math.max(-bound, Math.min(bound, value))) / (bound * 2)) * LOWER_HEIGHT;
+    lowerTicks = [-Math.floor(bound), 0, Math.floor(bound)].filter((value, index, list) => list.indexOf(value) === index);
+  } else if (lowerStudy === "STRETCH") {
     const values = visiblePoints
       .flatMap((point) => [point.stretch, point.stretch_p05, point.stretch_p95])
       .filter(valid)
@@ -340,7 +365,7 @@ export default function MarketChart({ chart, shortTerm }) {
   );
   const firstVisibleYear = visiblePoints[0].date.slice(0, 4);
   const hovered = visiblePoints[Math.min(activeIndex ?? latestIndex, latestIndex)];
-  const markerZones = layers.shortTouches ? ["st_buy", "st_sell"] : [];
+  const markerZones = [...(layers.shortTouches ? ["st_buy", "st_sell"] : []), ...(layers.momentum ? ["mom_buy", "mom_sell"] : [])];
   const hoveredTouches = markerZones.map((zone) => touchesByDate.get(`${hovered.key}:${zone}`)).filter(Boolean);
   const barName = BAR_SIZES.find((size) => size.key === barSize).name;
   const hoveredLabel = barSize === "1W" ? `Week of ${hovered.date}` : barSize === "4H" ? `${hovered.date} ${hovered.time}` : hovered.date;
@@ -448,6 +473,7 @@ export default function MarketChart({ chart, shortTerm }) {
             </button>
           ))}
           {[
+            ["MOMENTUM", "Momentum"],
             ["STRETCH", "Stretch"],
             ["RSI", "RSI"],
             ["MACD", "MACD"],
@@ -472,6 +498,11 @@ export default function MarketChart({ chart, shortTerm }) {
           <input checked={layers.shortTouches} onChange={() => toggle("shortTouches")} type="checkbox" />
           <span className="swatch touch" />
           <span className="swatch touch sell" /> Short-term touches
+        </label>
+        <label className="layer-toggle">
+          <input checked={layers.momentum} onChange={() => toggle("momentum")} type="checkbox" />
+          <span className="swatch signal" />
+          <span className="swatch signal sell" /> Momentum signals
         </label>
         <span className="legend-item ma20">EMA20</span>
         <span className="legend-item ma50">MA50</span>
@@ -588,6 +619,19 @@ export default function MarketChart({ chart, shortTerm }) {
             markerZones.map((zone) => {
               const touch = touchesByDate.get(`${point.key}:${zone}`);
               if (!touch) return null;
+              if (zone === "mom_buy" || zone === "mom_sell") {
+                // Sits beyond the touch triangle so both stay visible on the same bar.
+                const bottom = zone === "mom_buy";
+                return (
+                  <Diamond
+                    className={`touch-marker signal ${bottom ? "buy" : "sell"} ${touch.outcome}`}
+                    key={`${zone}-${point.key}`}
+                    title={`${touch.date} ${bottom ? "bottom" : "top"} signal at ${money(touch.entry)}: ${outcomeText(zone, touch.outcome)}`}
+                    x={xAt(index)}
+                    y={bottom ? Math.min(priceY(point.low) + 24, TOP + PRICE_HEIGHT + 6) : Math.max(priceY(point.high) - 24, TOP - 6)}
+                  />
+                );
+              }
               const buy = zone === "st_buy";
               const y = buy ? priceY(point.low) + 10 : priceY(point.high) - 10;
               return (
@@ -618,8 +662,39 @@ export default function MarketChart({ chart, shortTerm }) {
         </text>
         <line className="pane-separator" x1={LEFT} x2={plotRight} y1={LOWER_TOP - 12} y2={LOWER_TOP - 12} />
         <text className="pane-label" x={LEFT} y={LOWER_TOP - 18}>
-          {lowerStudy === "STRETCH" ? "Stretch from EMA20 (ATRs) · shaded = zone thresholds" : lowerStudy}
+          {lowerStudy === "STRETCH"
+            ? "Stretch from EMA20 (ATRs) · shaded = zone thresholds"
+            : lowerStudy === "MOMENTUM"
+              ? "Momentum: EMA5 − EMA13 (ATRs) · solid = building, light = fading"
+              : lowerStudy}
         </text>
+        {lowerStudy === "MOMENTUM" && (
+          <>
+            {lowerTicks.map((level) => (
+              <g key={level}>
+                <line className="study-boundary" x1={LEFT} x2={plotRight} y1={lowerY(level)} y2={lowerY(level)} />
+                <text className="axis-label" x={plotRight + 8} y={lowerY(level) + 4}>
+                  {level > 0 ? `+${level}` : level}
+                </text>
+              </g>
+            ))}
+            {visiblePoints.map((point, index) => {
+              if (!valid(point.momentum)) return null;
+              // Fading = the day's change points back toward zero.
+              const fading = valid(point.momentum_change) && point.momentum_change * point.momentum < 0;
+              return (
+                <rect
+                  className={`momentum-bar ${point.momentum >= 0 ? "bull" : "bear"}${fading ? " fading" : ""}`}
+                  height={Math.max(Math.abs(lowerY(point.momentum) - lowerY(0)), 0.5)}
+                  key={`momentum-${point.key}`}
+                  width={candleWidth}
+                  x={xAt(index) - candleWidth / 2}
+                  y={Math.min(lowerY(point.momentum), lowerY(0))}
+                />
+              );
+            })}
+          </>
+        )}
         {lowerStudy === "STRETCH" && (
           <>
             <path className="zone-layer buy short stretch-band" d={bandPath(visiblePoints, "stretch_p05", "stretch_p20", xAt, lowerY)} />
@@ -697,8 +772,9 @@ export default function MarketChart({ chart, shortTerm }) {
       </div>
       <p className="chart-footnote">
         ▲ below a candle = first touch of the short-term buy zone; ▼ above = first touch of the take-profit zone. Filled = price
-        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. Dashed = outcome still open. Hover a marker for
-        details.
+        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. ◆ = momentum signal (below = bottom,
+        above = top); filled = reached the 2R target before the stop beyond the interim low or high. Dashed = outcome still open.
+        Hover a marker for details.
       </p>
     </section>
   );

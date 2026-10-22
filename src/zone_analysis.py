@@ -13,17 +13,23 @@ import pandas as pd
 from .data_loader import MarketDataUnavailableError, download_intraday, load_market_data
 from .entry_zones import (
     BOUNCE_ATR,
+    MIN_RISK_ATR,
+    MOMENTUM_EXTREME_SESSIONS,
+    MOMENTUM_TURN_SESSIONS,
     SHORT_TERM_BUY_PCTL,
     SHORT_TERM_HORIZON,
     SHORT_TERM_LOOKBACK,
     SHORT_TERM_SELL_PCTL,
+    STOP_BUFFER_ATR,
+    TARGET_R,
     ZONE_KEYS,
     adjusted_ohlcv,
     bounce_readiness,
     breakdown_state,
     breakdown_study,
     compute_zone_frame,
-    confirmation_study,
+    momentum_signal_study,
+    momentum_state,
     position_in_zone,
     reversion_study,
     swing_levels,
@@ -41,16 +47,27 @@ CHART_PERIODS = 2520
 HOURS_PER_CANDLE = 4
 
 SHORT_TERM_ACTIONS = {
+    "TOP_SIGNAL": ("Sell signal: bullish momentum faded", "negative", f"Price reached the take-profit zone and momentum has fallen {MOMENTUM_TURN_SESSIONS} sessions in a row, so buying is losing force. Take profits on longs; the top fails if price closes above the interim high."),
+    "TOP_FORMING": ("Bullish momentum easing near the top", "caution", f"Price touched the take-profit zone and momentum dipped today, but one session is not a turn. A second falling session (a close below the momentum pivot) confirms the top."),
+    "TAKE_PROFIT_ZONE": ("Take-profit zone, momentum still rising", "negative", "Price is stretched into the take-profit zone but bullish momentum is still building. Tops usually come after momentum fades: avoid new entries and trail a stop rather than guessing the high."),
     "SUPPORT_BREAKDOWN": ("Support breakdown", "negative", "Price closed below its most recent swing-low support and has not reclaimed it; breakdowns can keep falling. Do not buy until price closes back above the broken level."),
-    "ENTRY_CONFIRMED": ("Entry confirmed", "positive", "Price tagged the buy zone and has reclaimed the prior session's high; the bounce has started."),
-    "ENTRY_ZONE_BOUNCE_FORMING": ("In entry zone, bounce forming", "positive", "Price is in the buy zone and printed a reversal candle; confirmation is a close above today's high."),
-    "ENTRY_ZONE": ("In entry zone", "caution", "Price is in the buy zone but has not printed a reversal signal; scale in or wait for a reversal candle."),
-    "BELOW_ENTRY_ZONE": ("Below entry zone", "negative", "Price has fallen through the buy zone; do not catch the knife until it closes back inside with a reversal."),
-    "APPROACHING_ENTRY": ("Approaching entry", "caution", "Price is within one ATR of the buy zone; set an alert at the top of the zone."),
-    "BOUNCE_UNDERWAY": ("Bounce underway", "neutral", "Price recently bounced from the buy zone and is now above it; chasing worsens reward/risk."),
-    "WAIT_FOR_PULLBACK": ("Wait for pullback", "neutral", "Price is between zones; wait for a pullback into the buy zone."),
-    "TAKE_PROFIT_ZONE": ("Take-profit zone", "negative", "Price is stretched into the short-term sell zone; take profits on existing longs and avoid new entries."),
+    "BOTTOM_SIGNAL": ("Buy signal: bearish momentum faded", "positive", f"Price touched the buy zone and momentum has risen {MOMENTUM_TURN_SESSIONS} sessions in a row, so the selling is losing force. The stop goes under the interim low: if that low breaks, the bottom failed."),
+    "BOTTOM_FORMING": ("Bearish momentum easing", "caution", f"Price is at or near the buy zone and bearish momentum is fading, but it has not risen {MOMENTUM_TURN_SESSIONS} sessions in a row yet. A close above the momentum pivot next session completes the turn."),
+    "ENTRY_ZONE_STILL_FALLING": ("In buy zone, momentum still falling", "caution", "Price is in the buy zone but bearish momentum is still building. Buying now is catching a falling knife; wait for momentum to turn up."),
+    "BELOW_ENTRY_ZONE": ("Below buy zone, momentum still falling", "negative", "Price has fallen through the buy zone and the selling is still accelerating. Wait for bearish momentum to fade before buying."),
+    "APPROACHING_ENTRY": ("Approaching buy zone", "caution", "Price is within one ATR of the buy zone; set an alert at the top of the zone, then wait for momentum to turn."),
+    "BOUNCE_UNDERWAY": ("Bounce underway", "neutral", "Price already turned up from the buy zone and is away from the interim low; chasing worsens reward/risk."),
+    "WAIT_FOR_PULLBACK": ("Wait for pullback", "neutral", "Price is between zones; wait for a pullback into the buy zone and a momentum turn."),
 }
+SELL_ACTIONS = {"TOP_SIGNAL", "TOP_FORMING", "TAKE_PROFIT_ZONE"}
+
+PHASE_TEXT = {
+    "BEARISH_BUILDING": "bearish and still building",
+    "BEARISH_FADING": "bearish but fading",
+    "BULLISH_BUILDING": "bullish and still building",
+    "BULLISH_FADING": "bullish but fading",
+}
+
 
 def _zone_payload(frame: pd.DataFrame, key: str, close: float, near_band: float, kind: str, percentiles: tuple[float, float], basis: str, confluence: list[str]) -> dict:
     last = frame.iloc[-1]
@@ -84,11 +101,43 @@ def _edge_grade(study: dict) -> dict:
     return {"grade": grade, "label": label, "edge_vs_baseline": edge, "success_rate": study.get("success_rate"), "baseline_success_rate": study.get("baseline_success_rate"), "episodes": study.get("episodes")}
 
 
+def _r_edge_grade(study: dict) -> dict:
+    """Grade momentum signals against the same trade taken on any day, in R per trade."""
+    edge = study.get("edge_r")
+    if not study.get("sufficient_sample") or edge is None:
+        grade, label = "THIN_SAMPLE", "Too few past signals to judge"
+    elif edge >= 0.10:
+        grade, label = "EDGE", "Signals beat an average day"
+    elif edge > 0:
+        grade, label = "SLIGHT_EDGE", "Signals marginally beat an average day"
+    else:
+        grade, label = "NO_EDGE", "Signals no better than an average day"
+    return {
+        "grade": grade, "label": label, "edge_r": edge, "expectancy_r": study.get("expectancy_r"),
+        "baseline_expectancy_r": study.get("baseline_expectancy_r"), "held_rate": study.get("held_rate"),
+        "baseline_held_rate": study.get("baseline_held_rate"), "episodes": study.get("episodes"),
+    }
+
+
 def _trim_study(study: dict) -> dict:
     return {key: value for key, value in study.items() if key != "recent_episodes"}
 
 
-def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataFrame, market_close: pd.Series | None, swings: list[dict]) -> tuple[dict, dict, dict]:
+def _signal_reasons(study: dict, kind: str) -> tuple[list[str], list[str]]:
+    """Plain-language evidence from a momentum-signal replay."""
+    extreme = "low" if kind == "bottom" else "high"
+    if not study["sufficient_sample"]:
+        return [], [f"Only {study['episodes']} completed {kind} signals in the history; statistics are thin."]
+    reasons = [
+        f"Past {kind} signals averaged {study['expectancy_r']:+.2f}R per trade vs {study['baseline_expectancy_r']:+.2f}R for the "
+        f"same trade on any day ({study['episodes']} signals); the interim {extreme} held {study['held_rate']:.0%} of the time "
+        f"vs {study['baseline_held_rate']:.0%} on any day."
+    ]
+    risks = [] if (study["edge_r"] or 0) > 0 else [f"{kind.capitalize()} signals have not beaten trading on an arbitrary day for this ticker."]
+    return reasons, risks
+
+
+def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataFrame, market_close: pd.Series | None, swings: list[dict]) -> tuple[dict, dict[str, dict]]:
     last = zones.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     atr = float(last["atr"])
@@ -106,93 +155,108 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
         zone_confluence(sell_low, sell_high, atr, anchors, swings, "sell"),
     )
     readiness = bounce_readiness(ohlc, features, zones, market_close)
+    momentum = momentum_state(ohlc, zones)
     buy_study = reversion_study(ohlc, zones, "buy")
     sell_study = reversion_study(ohlc, zones, "sell")
-    confirmed_study = confirmation_study(ohlc, zones, buy_study["baseline_success_rate"])
+    bottom_study = momentum_signal_study(ohlc, zones, "buy")
+    top_study = momentum_signal_study(ohlc, zones, "sell")
     breakdown = breakdown_state(ohlc, zones, swings)
     broken_study = breakdown_study(ohlc, zones, sell_study["baseline_success_rate"])
 
     buy_position, sell_position = buy_zone["position"], sell_zone["position"]
-    touched = readiness["touched_buy_zone_recently"]
-    if sell_position in {"INSIDE", "ABOVE"}:
+    signal = momentum["signal"] if momentum["signal"] and momentum["signal"]["active"] else None
+    phase = momentum["phase"]
+    near_buy = momentum["touched_buy_zone"] or buy_position in {"INSIDE", "BELOW"}
+    if signal and signal["side"] == "sell":
+        action = "TOP_SIGNAL"
+    elif momentum["touched_sell_zone"] and phase == "BULLISH_FADING":
+        action = "TOP_FORMING"
+    elif sell_position in {"INSIDE", "ABOVE"}:
         action = "TAKE_PROFIT_ZONE"
     elif breakdown["active"]:
-        # A close through support overrides the bounce reading until the level is reclaimed.
+        # A close through support overrides the bottom reading until the level is reclaimed.
         action = "SUPPORT_BREAKDOWN"
-    elif touched and readiness["stage"] == "CONFIRMED":
-        action = "BOUNCE_UNDERWAY" if buy_position == "AWAY" else "ENTRY_CONFIRMED"
+    elif signal:
+        action = "BOTTOM_SIGNAL"
+    elif near_buy and phase == "BEARISH_FADING":
+        action = "BOTTOM_FORMING"
     elif buy_position == "INSIDE":
-        action = "ENTRY_ZONE_BOUNCE_FORMING" if readiness["stage"] == "FORMING" else "ENTRY_ZONE"
+        action = "ENTRY_ZONE_STILL_FALLING"
     elif buy_position == "BELOW":
         action = "BELOW_ENTRY_ZONE"
     elif buy_position == "NEAR":
         action = "APPROACHING_ENTRY"
-    elif touched:
+    elif momentum["touched_buy_zone"]:
         action = "BOUNCE_UNDERWAY"
     else:
         action = "WAIT_FOR_PULLBACK"
     label, tone, definition = SHORT_TERM_ACTIONS[action]
-    evidence = {"ENTRY_CONFIRMED": confirmed_study, "SUPPORT_BREAKDOWN": broken_study}.get(action, buy_study)
-    edge = _edge_grade(evidence)
+    if action == "SUPPORT_BREAKDOWN":
+        edge = _edge_grade(broken_study)
+    else:
+        edge = _r_edge_grade(top_study if action in SELL_ACTIONS else bottom_study)
     # A setup this ticker's own history does not reward is never shown as a green light.
     if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
         tone = "caution"
 
-    if action in {"ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE"}:
-        reference, reference_basis = close, "current close"
+    pivot = momentum["pivot_price"]
+    if action == "BOTTOM_SIGNAL":
+        reference, reference_basis = close, f"current close; the bottom signal fired on {signal['date']} at {signal['entry']:.2f}"
+        stop, stop_basis = signal["stop"], f"{STOP_BUFFER_ATR:g} ATR under the interim low (set at the signal): below it the bottom failed"
+        target_1, target_1_basis = signal["target"], f"{TARGET_R:g}x the risk from the signal close, the replay's target"
     elif action == "SUPPORT_BREAKDOWN":
         reference, reference_basis = breakdown["broken_level"], "close back above the broken support (failed breakdown)"
-    elif buy_position == "BELOW":
-        # Below the zone a limit at its top would sit above the stop; wait for a close back inside instead.
-        reference, reference_basis = buy_low, "close back above the bottom of the buy zone (reclaim)"
+        stop, stop_basis = reference - BOUNCE_ATR * atr, f"{BOUNCE_ATR:g} ATR below the reclaim level"
+        target_1, target_1_basis = None, None
+    elif near_buy and phase.startswith("BEARISH") and pivot is not None:
+        turns = "a second rising session completes the signal" if phase == "BEARISH_FADING" else f"momentum needs {MOMENTUM_TURN_SESSIONS} rising sessions"
+        reference = max(pivot, close) if phase == "BEARISH_FADING" else pivot
+        reference_basis = f"estimated close that turns momentum up next session; {turns}"
+        stop = min(momentum["interim_low"] - STOP_BUFFER_ATR * atr, reference - MIN_RISK_ATR * atr)
+        stop_basis = f"{STOP_BUFFER_ATR:g} ATR under the interim low ({momentum['interim_low']:.2f}); moves lower if price makes a new low first"
+        target_1, target_1_basis = None, None
     else:
-        reference, reference_basis = buy_high, "top of buy zone (limit entry)"
-    stop = reference - BOUNCE_ATR * atr
-    target_1 = reference + BOUNCE_ATR * atr
-    target_2 = max(sell_low, target_1)
+        reference, reference_basis = buy_high, "top of the buy zone, then wait for momentum to turn up before buying"
+        stop = buy_low - STOP_BUFFER_ATR * atr
+        stop_basis = "estimate under the buy zone; once the signal fires the stop goes under the interim low"
+        target_1, target_1_basis = None, None
     risk = max(reference - stop, 0.01)
+    if target_1 is None:
+        target_1 = reference + (BOUNCE_ATR * atr if action == "SUPPORT_BREAKDOWN" else TARGET_R * risk)
+        target_1_basis = f"{BOUNCE_ATR:g} ATR rebound" if action == "SUPPORT_BREAKDOWN" else f"{TARGET_R:g}x the risk, the replay's target"
+    target_2 = max(sell_low, target_1)
     trade_plan = {
         "entry_reference": clean_float(reference, 2),
         "entry_reference_basis": reference_basis,
         "stop_loss": clean_float(stop, 2),
-        "stop_basis": f"{BOUNCE_ATR:g} ATR below entry, the same bracket the history replay uses",
+        "stop_basis": stop_basis,
         "target_1": clean_float(target_1, 2),
-        "target_1_basis": f"{BOUNCE_ATR:g} ATR bounce, the replay's success level",
+        "target_1_basis": target_1_basis,
         "target_2": clean_float(target_2, 2),
-        "target_2_basis": "bottom of the short-term sell zone (full swing)",
+        "target_2_basis": "bottom of the short-term take-profit zone (full swing)",
         "mean_reversion_level": clean_float(last["ema20"], 2),
         "reward_risk_target_1": clean_float((target_1 - reference) / risk, 2),
         "reward_risk_target_2": clean_float((target_2 - reference) / risk, 2),
     }
 
-    context = buy_study["by_trend"]
     reasons, risks = [], []
-    if buy_study["sufficient_sample"]:
-        reasons.append(
-            f"{buy_study['success_rate']:.0%} of {buy_study['episodes']} earlier buy-zone touches bounced {BOUNCE_ATR:g} ATR "
-            f"before dropping {BOUNCE_ATR:g} ATR (any-day baseline {buy_study['baseline_success_rate']:.0%}); "
-            f"median best bounce {buy_study['median_favorable_move']:+.1%} within {SHORT_TERM_HORIZON} sessions."
-        )
-        if (buy_study["edge_vs_baseline"] or 0) <= 0:
-            risks.append("Buying at this zone has not beaten buying on an arbitrary day for this ticker.")
-        if confirmed_study["sufficient_sample"] and (confirmed_study["edge_vs_baseline"] or 0) <= 0:
-            risks.append("Waiting for a reversal close has not beaten buying on an arbitrary day for this ticker.")
-        if context["current_context_success_rate"] is not None and context["current_context_episodes"] >= 5:
+    faded = momentum["faded_from_extreme"] or 0
+    reasons.append(
+        f"Momentum is {momentum['value_atr']:+.2f} ATR, {PHASE_TEXT[phase]}"
+        + (f"; {faded:.0%} of its {MOMENTUM_EXTREME_SESSIONS}-session extreme has worn off." if faded > 0 else ".")
+    )
+    if action in SELL_ACTIONS:
+        signal_reasons, signal_risks = _signal_reasons(top_study, "top")
+        reasons += signal_reasons
+        risks += signal_risks
+        if sell_study["sufficient_sample"]:
             reasons.append(
-                f"In the current {context['current_context']} context (vs. 200-day MA) the bounce rate was "
-                f"{context['current_context_success_rate']:.0%} over {context['current_context_episodes']} touches."
+                f"{sell_study['success_rate']:.0%} of {sell_study['episodes']} earlier take-profit-zone touches pulled back "
+                f"{BOUNCE_ATR:g} ATR before extending {BOUNCE_ATR:g} ATR higher (baseline {sell_study['baseline_success_rate']:.0%})."
             )
-    else:
-        risks.append(f"Only {buy_study['episodes']} completed buy-zone touches in the history; statistics are thin.")
-    if action == "TAKE_PROFIT_ZONE" and sell_study["sufficient_sample"]:
-        reasons.insert(
-            0,
-            f"{sell_study['success_rate']:.0%} of {sell_study['episodes']} earlier sell-zone touches pulled back {BOUNCE_ATR:g} ATR "
-            f"before extending {BOUNCE_ATR:g} ATR higher (baseline {sell_study['baseline_success_rate']:.0%}).",
-        )
-    if close < float(last["ma200"]):
-        risks.append("Price is below its 200-day average; bounces in downtrends fail more often.")
-    if action == "SUPPORT_BREAKDOWN":
+        if phase == "BULLISH_BUILDING":
+            risks.append("Bullish momentum is still building; selling into it often leaves the last leg on the table.")
+    elif action == "SUPPORT_BREAKDOWN":
         # Bounce statistics argue for the opposite trade, so the breakdown evidence replaces them.
         reasons = [
             f"Closed below swing-low support at {breakdown['broken_level']:.2f} on {breakdown['breakdown_date']}; "
@@ -210,10 +274,21 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
                 risks.append(f"{broken_study['reclaim_rate']:.0%} of earlier breakdowns closed back above the broken level within {SHORT_TERM_HORIZON} sessions.")
         else:
             risks.insert(0, f"Only {broken_study['episodes']} completed support breakdowns in the history; statistics are thin.")
-    elif buy_position in {"INSIDE", "BELOW", "NEAR"} or touched:
-        reasons += [f"{check['label']}: {check['detail']}." for check in readiness["checks"] if check["passed"]]
-        if not any(check["passed"] for check in readiness["checks"] if check["key"] in {"reversal_candle", "reclaim"}):
-            risks.append("No reversal candle or reclaim yet; selling pressure may not be finished.")
+    else:
+        signal_reasons, signal_risks = _signal_reasons(bottom_study, "bottom")
+        reasons += signal_reasons
+        risks += signal_risks
+        if buy_study["sufficient_sample"]:
+            reasons.append(
+                f"Buying at the first touch instead: {buy_study['success_rate']:.0%} of {buy_study['episodes']} touches bounced "
+                f"{BOUNCE_ATR:g} ATR before dropping {BOUNCE_ATR:g} ATR (any-day baseline {buy_study['baseline_success_rate']:.0%})."
+            )
+        if near_buy:
+            reasons += [f"{check['label']}: {check['detail']}." for check in readiness["checks"] if check["passed"] and check["key"] != "momentum_fading"]
+            if phase == "BEARISH_BUILDING":
+                risks.insert(0, "Bearish momentum is still building; the low is probably not in yet.")
+    if close < float(last["ma200"]):
+        risks.append("Price is below its 200-day average; bounces in downtrends fail more often.")
     market_check = next(check for check in readiness["checks"] if check["key"] == "market_backdrop")
     if not market_check["passed"]:
         risks.append(market_check["detail"] + ".")
@@ -224,7 +299,8 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
         "action_label": label,
         "tone": tone,
         "action_definition": definition,
-        "is_entry_now": action in {"ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE"},
+        "is_entry_now": action == "BOTTOM_SIGNAL",
+        "is_exit_now": action == "TOP_SIGNAL",
         "historical_edge": edge,
         "buy_zone": buy_zone,
         "sell_zone": sell_zone,
@@ -236,19 +312,21 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
                 for level in (*SHORT_TERM_BUY_PCTL, *SHORT_TERM_SELL_PCTL)
             },
         },
+        "momentum": momentum,
         "bounce_readiness": readiness,
         "breakdown": breakdown,
         "trade_plan": trade_plan,
         "history": {
             "buy_zone": _trim_study(buy_study),
-            "confirmed_entry": confirmed_study,
+            "momentum_bottom": _trim_study(bottom_study),
             "sell_zone": _trim_study(sell_study),
+            "momentum_top": _trim_study(top_study),
             "breakdown": _trim_study(broken_study),
         },
         "reasons": reasons[:6],
         "risks": risks[:5],
     }
-    return view, buy_study, sell_study
+    return view, {"st_buy": buy_study, "st_sell": sell_study, "mom_buy": bottom_study, "mom_sell": top_study}
 
 
 def _four_hour_bars(intraday: pd.DataFrame | None, features: pd.DataFrame) -> list[dict]:
@@ -309,6 +387,8 @@ def _chart_data(
             "macd_signal": clean_float(feature.get("macd_signal")),
             "macd_hist": clean_float(feature.get("macd_hist")),
             "stretch": clean_float(zone["st_dev"], 3),
+            "momentum": clean_float(zone["momentum"], 3),
+            "momentum_change": clean_float(zone["momentum_change"], 3),
         }
         for key in ZONE_KEYS:
             for edge in ("low", "high"):
@@ -399,7 +479,7 @@ def build_zone_report(
             f"{ticker.upper()} needs at least about one year of daily history to calibrate its zones."
         )
     swings = swing_levels(ohlc)
-    short_term, st_buy_study, st_sell_study = _short_term_view(ohlc, features, zones, market_close, swings)
+    short_term, studies = _short_term_view(ohlc, features, zones, market_close, swings)
     latest = features.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     previous_close = float(ohlc["close"].iloc[-2])
@@ -439,13 +519,14 @@ def build_zone_report(
         "macro_context": build_macro_context(latest, benchmarks["treasury_yield"], benchmarks["oil"]),
         "chart_data": _chart_data(
             ohlc, features, zones,
-            {"st_buy": st_buy_study, "st_sell": st_sell_study},
+            studies,
             intraday,
         ),
         "methodology": {
             "summary": (
                 "Zones are calibrated from this ticker's own history, not predicted. Short-term zones measure how far "
-                "price is stretched from its 20-day EMA in ATR units. "
+                "price is stretched from its 20-day EMA in ATR units; momentum, (EMA5 - EMA13) / ATR, measures how fast it got "
+                "there, and buy or sell signals wait for that momentum to fade. "
                 "Each zone is replayed against every earlier visit to report how price behaved afterwards."
             ),
             "short_term_lookback_sessions": SHORT_TERM_LOOKBACK,

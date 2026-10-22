@@ -516,6 +516,88 @@ h1 {
   text-align: right;
 }
 
+/* Momentum gauge: centered at zero, bearish left, bullish right */
+
+.momentum-gauge {
+  margin-top: 14px;
+}
+
+.momentum-gauge .gauge-scale {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.momentum-gauge .gauge-scale span:nth-child(2) {
+  text-align: center;
+}
+
+.momentum-fill {
+  height: 100%;
+  opacity: 0.7;
+  position: absolute;
+  top: 0;
+}
+
+.momentum-fill.bear {
+  background: var(--down);
+}
+
+.momentum-fill.bull {
+  background: var(--up);
+}
+
+.momentum-zero {
+  background: var(--muted);
+  height: 18px;
+  left: 50%;
+  position: absolute;
+  top: -3px;
+  width: 1px;
+}
+
+.momentum-extreme {
+  border-left: 2px dotted var(--muted);
+  height: 100%;
+  position: absolute;
+  top: 0;
+}
+
+.momentum-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.momentum-note strong {
+  color: var(--text);
+}
+
+.momentum-gauge + .gauge {
+  margin-top: 16px;
+}
+
+.signal-callout {
+  border-left: 4px solid var(--zone-buy);
+  background: var(--zone-buy-soft);
+  display: grid;
+  font-size: 13px;
+  gap: 2px;
+  margin: 10px 0 4px;
+  padding: 8px 12px;
+}
+
+.signal-callout.sell {
+  background: var(--zone-sell-soft);
+  border-left-color: var(--zone-sell);
+}
+
+.signal-callout.stale {
+  opacity: 0.7;
+}
+
+.signal-callout span {
+  color: var(--muted);
+}
+
 /* Layout */
 
 .dashboard-layout {
@@ -690,6 +772,10 @@ h1 {
 
 .ladder-row.line.support .ladder-swatch i {
   background: repeating-linear-gradient(90deg, var(--zone-buy) 0 3px, transparent 3px 5px);
+}
+
+.ladder-row.line.pivot .ladder-swatch i {
+  background: repeating-linear-gradient(90deg, var(--text) 0 2px, transparent 2px 4px);
 }
 
 .ladder-row.line.broken .ladder-swatch i {
@@ -932,6 +1018,17 @@ h1 {
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
 
+.swatch.signal {
+  background: var(--zone-buy);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  width: 10px;
+}
+
+.swatch.signal.sell {
+  background: var(--zone-sell);
+  margin-left: -2px;
+}
+
 .swatch.touch.sell {
   background: var(--zone-sell);
   clip-path: polygon(0 0, 100% 0, 50% 100%);
@@ -1012,7 +1109,12 @@ h1 {
 }
 
 .touch-note.st_buy,
-.touch-note.st_sell {
+.touch-note.mom_buy {
+  color: var(--zone-buy);
+}
+
+.touch-note.st_sell,
+.touch-note.mom_sell {
   color: var(--zone-sell);
 }
 
@@ -1282,6 +1384,21 @@ h1 {
 
 .histogram.down {
   fill: rgba(200, 69, 69, 0.44);
+}
+
+.momentum-bar.bull {
+  fill: var(--up);
+  opacity: 0.85;
+}
+
+.momentum-bar.bear {
+  fill: var(--down);
+  opacity: 0.85;
+}
+
+/* Fading momentum (moving back toward zero) is drawn lighter, so turns stand out. */
+.momentum-bar.fading {
+  opacity: 0.35;
 }
 
 .crosshair {

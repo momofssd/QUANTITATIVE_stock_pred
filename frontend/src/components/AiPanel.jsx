@@ -10,15 +10,17 @@ const SECTIONS = [
 ];
 
 const VIEW_LABELS = {
+  TOP_SIGNAL: "Sell signal: bullish momentum faded",
+  TOP_FORMING: "Bullish momentum easing near the top",
+  TAKE_PROFIT_ZONE: "Take-profit zone, momentum still rising",
   SUPPORT_BREAKDOWN: "Support breakdown",
-  ENTRY_CONFIRMED: "Entry confirmed",
-  ENTRY_ZONE_BOUNCE_FORMING: "In entry zone, bounce forming",
-  ENTRY_ZONE: "In entry zone",
-  BELOW_ENTRY_ZONE: "Below entry zone",
-  APPROACHING_ENTRY: "Approaching entry",
+  BOTTOM_SIGNAL: "Buy signal: bearish momentum faded",
+  BOTTOM_FORMING: "Bearish momentum easing",
+  ENTRY_ZONE_STILL_FALLING: "In buy zone, momentum still falling",
+  BELOW_ENTRY_ZONE: "Below buy zone, momentum still falling",
+  APPROACHING_ENTRY: "Approaching buy zone",
   BOUNCE_UNDERWAY: "Bounce underway",
   WAIT_FOR_PULLBACK: "Wait for pullback",
-  TAKE_PROFIT_ZONE: "Take-profit zone",
 };
 
 const viewLabel = (code) => VIEW_LABELS[code] || code?.replaceAll("_", " ").toLowerCase() || "-";

@@ -5,6 +5,8 @@ Python and React app that shows **where to buy and where to sell** a stock or ET
 - **Short-term buy zone**: where price would be stretched below its 20-day EMA by as much as the ticker's 5th-20th percentile over the last 3 years, measured in ATRs. This is the V-bounce entry area.
 - **Short-term take-profit zone**: the same stretch at the 80th-95th percentile above the EMA.
 
+A zone only says price is stretched. Buy and sell signals also wait for the **momentum** that pushed price there to fade (see [Momentum signals](#momentum-signals-interim-bottoms-and-tops)).
+
 For each zone the dashboard tells you whether the current price is inside, near, below, or away from it, and how far it would have to move. Zones are not forecasts; the only forecast is the trend outlook described below. An analysis takes a few seconds.
 
 This is decision support, not financial advice.
@@ -34,12 +36,12 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 
 The React frontend shows:
 
-- **Short-term entry card**: action (`SUPPORT_BREAKDOWN`, `ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics (or, after a support breakdown, the historical continuation statistics)
+- **Short-term card**: action (`TOP_SIGNAL`, `TOP_FORMING`, `TAKE_PROFIT_ZONE`, `SUPPORT_BREAKDOWN`, `BOTTOM_SIGNAL`, `BOTTOM_FORMING`, `ENTRY_ZONE_STILL_FALLING`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`), the latest bottom or top signal with its stop and target, current price, next-session buy and take-profit zones with distance, the interim low or high, a momentum gauge (value, phase, how much has faded, and the pivot close that turns it), a stretch-percentile gauge, and the replay of past signals (or, after a support breakdown, the historical continuation statistics)
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
-- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time, next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ buy/take-profit), and a stretch / RSI / MACD lower pane
+- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time, next session's zones at the right edge, markers on earlier zone touches (▲/▼ buy/take-profit) and momentum signals (◆ bottom/top) coloured by outcome, and a momentum / stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
-- **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
-- **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
+- **Bounce checklist**: stretched, oversold, bearish momentum fading, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
+- **Short-term trade plan**: entry, a stop under the interim low, and a 2R target, the same trade the signal replay grades
 - **Historical replay tables**, technical and macro context, and an optional Gemini explanation
 
 ### Trend outlook
@@ -51,9 +53,31 @@ The trend panel gives the probability of a higher close 10 and 60 sessions ahead
 
 The headline uses the model only when it beat the base rate out of sample (Brier skill score of at least 2% and AUC of at least 0.56). Otherwise the headline is the base rate, and the model's reading is shown for reference with its test record. When this was built, neither this model nor larger feature sets beat the base rate on SPY, QQQ, SMH, NVDA, AAPL, XLE, TLT or GLD at either horizon, so expect the base rate to be the usual headline.
 
-### Reading the bounce statistics
+### Momentum signals: interim bottoms and tops
 
-A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
+A buy zone tells you price is stretched, not that the selling has stopped. Buying at the first touch catches a falling knife: across 29 cached tickers (2012–2026), a lower low followed within 10 sessions three times out of four. The signals therefore wait for momentum to fade.
+
+- **Momentum** = (EMA5 − EMA13) / ATR14: how fast price has been moving, in ATRs. Below 0 is bearish, above 0 bullish. Whether it is building or fading is read from the EMA spread itself, so a quiet session cannot make a stalled decline look like it is accelerating.
+- **Phase**: bearish building (still falling), bearish fading, bullish building, bullish fading. **Faded** = share of the 10-session extreme that has worn off.
+- **Pivot price**: both EMAs move linearly with the close, so there is an exact next-session close above which momentum rises and below which it falls.
+- **Bottom signal** (`BOTTOM_SIGNAL`): within 5 sessions of a buy-zone touch, momentum is still negative but has risen 2 sessions in a row. Entry at that close, stop 0.25 ATR under the 6-session low (at least 0.5 ATR away), target 2x the risk, exit after 10 sessions otherwise. One rising session is `BOTTOM_FORMING`; still falling is `ENTRY_ZONE_STILL_FALLING` or `BELOW_ENTRY_ZONE`.
+- **Top signal** (`TOP_SIGNAL`): the mirror at the take-profit zone; bullish momentum fell 2 sessions in a row. The stop is 0.25 ATR above the 6-session high.
+
+Every past signal is replayed as that trade and scored in **R** (profit or loss as a multiple of the amount risked) against the same trade from every session's close. The edge grade is `EDGE` at +0.10R or more, `SLIGHT_EDGE` above 0, otherwise `NO_EDGE`, and a buy signal is shown as positive only with `EDGE` or `SLIGHT_EDGE`. The replay also reports how often the interim low (high) held for 10 sessions.
+
+How the rule was chosen: momentum speeds (3/10, 5/13, 5/20, 8/21), one to three turning sessions, a close above the prior high, a minimum trough depth, RSI(2), price/momentum divergence, and a "still falling but slower" entry were compared on 2012–2020 only, then checked on 2021–2026. Results across 29 cached tickers when this was built:
+
+| Buy rule | Avg R 2012–2020 | Avg R 2021–2026 | Interim low held |
+|---|---|---|---|
+| Any day | +0.13 | +0.08 | 49–52% |
+| First touch of the buy zone (previous entry) | +0.07 | −0.02 | 25–26% |
+| Bottom signal | +0.22 | +0.08 | 53–62% |
+
+The bottom signal beat the first-touch entry in 11 of 14 years and beat any day in 11 of 14 years (21 of 29 tickers), but in 2021–2026 the aggregate edge over any day was about zero. Divergence, the "slowing but still falling" entry, and requiring a close above the prior high did not hold up out of sample. Top signals beat selling at the first touch but not selling on any day (9 of 14 years, 14 of 29 tickers): calling tops in rising markets rarely pays. Read the ticker's own replay before trusting either signal.
+
+### Reading the zone-touch statistics
+
+A zone-touch setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close.
 
 ### Support breakdowns
 
