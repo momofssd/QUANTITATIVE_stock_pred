@@ -1,19 +1,15 @@
 # Entry Zone Interpreter Skill
 
 ## Purpose
-Explain a price-zone report to two readers:
-
-- a **short-term swing trader** deciding whether the current price is at, or close to, an entry where a V-shaped bounce is plausible
-- a **long-term investor** deciding whether to accumulate, hold, or trim
+Explain a price-zone report to a **short-term swing trader** deciding whether the current price is at, or close to, an entry where a V-shaped bounce is plausible.
 
 The zones are not forecasts. They show where price sits relative to levels calibrated from the ticker's own history, and how price behaved after earlier visits. The only forecast is `trend_outlook`, and it comes with its own out-of-sample test. Explain the evidence; never add predictions of your own.
 
 ## Input
-The JSON (`schema_version` 3.x, `analysis_type: price_zones`) contains:
+The JSON (`schema_version` 4.x, `analysis_type: price_zones`) contains:
 
 - `current_market`: price, daily change, trend label
 - `short_term`: action, buy zone, sell zone, stretch, bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.confirmed_entry`, `history.sell_zone`, `history.breakdown`), `historical_edge`, reasons, risks
-- `long_term`: action, `trade_plan` (3:1 entry, stop, target, reward/risk now), `historical_edge`, value zone, trim zone, distance from the 200-day MA, historical replays (`history.buy_zone`, `history.sell_zone`, `history.plan`)
 - `trend_outlook.short_term` / `trend_outlook.long_term`: probability of a higher close in 10 / 60 sessions
 - `technical_indicators`, `macro_context`, `data_quality`
 
@@ -54,29 +50,14 @@ How to read a short-term row, in this order:
 5. **Move sizes**: `median_favorable_move` is the median best gain within the window; `median_adverse_move` is the median worst dip. `median_days_to_extreme` is how many sessions price usually took to bottom after a touch, which tells a V-bounce trader how early a touch tends to be.
 6. **Verdict**: one sentence on what the row means for the trader.
 
-**Long-term rows** (`long_term.history`): visits at least 20 sessions apart, outcome measured 60 sessions later.
-- `buy_zone`: worked = higher close 60 sessions later. Always compare the rate with `baseline_success_rate` (the same test from any day); most stocks close higher 60 sessions later on most days, so a high rate alone proves nothing. Report `edge_vs_baseline`, `median_forward_return` vs `baseline_median_forward_return`, and `median_max_drawdown` (how deep it usually fell first).
-- `sell_zone`: worked = lower close 60 sessions later, i.e. trimming avoided a decline. A low rate with a positive `median_forward_return` means trimming there usually cost money; say so plainly.
-
-- `plan`: past long-term adds after a confirmed dip, scored in R (profit or loss as a multiple of the planned risk). Explain R once. The key comparison is `expectancy_r` vs `baseline_expectancy_r` (buying on any day); `edge_r` is the difference. Always check it holds up: `median_r` (the typical add), `edge_without_best_r` (negative means one trade carried it), `probability_no_better_than_baseline` (under 10% is convincing), and `max_consecutive_stops`. Never present `success_rate` against 100%.
-
 Never call a replay rate a probability or a prediction. Say "in past visits".
-
-### Long-term adds (adding shares to a holding)
-The rule never recommends adding while price is still falling. Explain it in this order:
-1. `trade_plan.buy_area`: reaching it arms an add for 20 sessions; it is not a buy by itself. If `armed` is false, give `distance_to_buy_area_pct` (positive means price must fall that much).
-2. `trade_plan.confirm_above`: the add needs a close above this (the prior `confirm_sessions`-session high). While price is below it the dip is still falling.
-3. `trade_plan.stop`: when `armed`, it sits under the dip's low (`dip_low`); if that low breaks, support has failed. Otherwise it is the long-term stop.
-4. `trade_plan.target`, `reward_risk_now` with `risk_to_stop_now_pct`.
-- Action meanings: add shares, dip confirmed = the dip turned up with at least 2:1 left; in buy area, still falling = do not add yet; dip already bounced = too late for 2:1, wait for the next dip; in value zone, above buy area = cheap but not cheap enough; below long-term stop = do not add.
-- `long_term.historical_edge` grades past adds against buying on any day. Do not describe adding as favorable when the grade is no edge or thin sample, and say "edge came from one trade" plainly when that is the label.
 
 ### Trend outlook
 - `probability_bullish` is the headline. When `probability_source` is `base_rate`, it is only how often the ticker closed higher over that horizon historically. Say that plainly and do not call it a forecast.
 - `model_probability_bullish` is for reference only unless `reliability` is `USEFUL`. `NO_SKILL` means the model did worse than quoting the base rate (`brier_skill_score` below 0; `auc` of 0.5 is a coin flip).
 
 ## Writing and formatting rules
-- **Plain words.** Never print internal codes (`BELOW_ENTRY_ZONE`, `NO_EDGE`, `WASHOUT_NO_REVERSAL_YET`, `HOLD_WAIT`) in prose. Use their meaning, e.g. "below the entry zone", "no edge".
+- **Plain words.** Never print internal codes (`BELOW_ENTRY_ZONE`, `NO_EDGE`, `WASHOUT_NO_REVERSAL_YET`) in prose. Use their meaning, e.g. "below the entry zone", "no edge".
 - **Numbers:** prices as `$564.74`; percentages with at most one decimal (`50.3%`, `-1.4 points`). Never show the same number twice in different forms, and never show raw decimals such as 0.0144.
 - **Bold** only the few numbers a reader must see: the zone, the current price, the stop, the success rate and its baseline.
 - Short sentences. No section longer than about 150 words, excluding tables.
@@ -90,7 +71,7 @@ Do not start a field with a top-level heading; the dashboard adds the section ti
 
 **`headline`**: one plain sentence, no markdown, e.g. "SMH slipped just below its short-term buy zone; wait for a reversal before buying."
 
-**`summary_markdown`**: 2–4 bullets: where price is for the trader, where it is for the investor, the single most important piece of evidence, and the main risk.
+**`summary_markdown`**: 2–4 bullets: where price is relative to the zones, the single most important piece of evidence, and the main risk.
 
 **`short_term_markdown`**:
 ```
@@ -127,9 +108,6 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 | Wait for reversal close | … | …% | …% | ± … pts |
 | Take profit at first touch | … | …% | …% | ± … pts |
 | Close below swing-low support (kept falling) | … | …% | …% | ± … pts |
-| Long-term value zone (60 sessions) | … | …% | …% | ± … pts |
-| Long-term trim zone (60 sessions) | … | …% | …% | ± … pts |
-| Long-term adds after a confirmed dip (avg R; median R; edge without best) | … | …R | …R | ± …R |
 
 #### What this means
 - One bullet per row, following the reading steps above.
@@ -137,8 +115,6 @@ One sentence explaining the test (symmetric 1.5 ATR bracket, ~50% break-even, co
 ```
 
 **`trend_outlook_markdown`**: one bullet per horizon (10 and 60 sessions) giving the bullish probability, whether it is a base rate or a tested model call, and the model's test result in plain words.
-
-**`long_term_markdown`**: the add rule first (buy area, whether the dip is armed, the confirmation price, the stop under the dip, the target, reward/risk now with the stop distance), then where price sits between the value and trim zones, its distance from the 200-day MA, and how the plan and the zones did against buying on any day.
 
 **`key_reasons`, `main_risks`**: 3–5 short plain sentences each, no markdown.
 

@@ -18,7 +18,6 @@ MARKDOWN_SECTIONS = (
     "short_term_markdown",
     "historical_replay_markdown",
     "trend_outlook_markdown",
-    "long_term_markdown",
 )
 
 INTERPRETATION_SCHEMA = {
@@ -26,7 +25,6 @@ INTERPRETATION_SCHEMA = {
     "properties": {
         "ticker": {"type": "string"},
         "short_term_view": {"type": "string"},
-        "long_term_view": {"type": "string"},
         "headline": {"type": "string"},
         **{section: _MARKDOWN for section in MARKDOWN_SECTIONS},
         "key_reasons": _STRING_LIST,
@@ -37,7 +35,6 @@ INTERPRETATION_SCHEMA = {
     "required": [
         "ticker",
         "short_term_view",
-        "long_term_view",
         "headline",
         *MARKDOWN_SECTIONS,
         "key_reasons",
@@ -48,7 +45,6 @@ INTERPRETATION_SCHEMA = {
     "propertyOrdering": [
         "ticker",
         "short_term_view",
-        "long_term_view",
         "headline",
         *MARKDOWN_SECTIONS,
         "key_reasons",

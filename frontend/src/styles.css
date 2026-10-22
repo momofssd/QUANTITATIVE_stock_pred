@@ -19,7 +19,7 @@
   --ma20: #166bb8;
   --ma50: #e08a18;
   --ma200: #6c4bb5;
-  /* Zone pair validated for colour-vision deficiency (ΔE 8.7); always paired with labels or hatching. */
+  /* Zone pair validated for colour-vision deficiency (ΔE 8.7); always paired with labels. */
   --zone-buy: #1f7a4d;
   --zone-sell: #c2410c;
   --zone-buy-soft: #e5f2ea;
@@ -295,7 +295,6 @@ h1 {
 .decision-grid {
   display: grid;
   gap: 18px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 22px 0;
 }
 
@@ -381,10 +380,6 @@ h1 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 14px 0;
   padding: 14px 0;
-}
-
-.hero-facts.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .fact span,
@@ -688,16 +683,6 @@ h1 {
   background: var(--zone-sell);
 }
 
-.ladder-row.buy.long .ladder-swatch i {
-  background: repeating-linear-gradient(135deg, var(--zone-buy) 0 2px, transparent 2px 4px);
-  border: 1px solid var(--zone-buy);
-}
-
-.ladder-row.sell.long .ladder-swatch i {
-  background: repeating-linear-gradient(135deg, var(--zone-sell) 0 2px, transparent 2px 4px);
-  border: 1px solid var(--zone-sell);
-}
-
 .ladder-row.line .ladder-swatch i {
   background: #9aa8a0;
   height: 3px;
@@ -705,10 +690,6 @@ h1 {
 
 .ladder-row.line.support .ladder-swatch i {
   background: repeating-linear-gradient(90deg, var(--zone-buy) 0 3px, transparent 3px 5px);
-}
-
-.ladder-row.line.lt-entry .ladder-swatch i {
-  background: var(--zone-buy);
 }
 
 .ladder-row.line.broken .ladder-swatch i {
@@ -946,11 +927,6 @@ h1 {
   opacity: 0.6;
 }
 
-.swatch.zone-long {
-  background: repeating-linear-gradient(135deg, var(--zone-buy) 0 2px, transparent 2px 4px);
-  border: 1px solid var(--zone-buy);
-}
-
 .swatch.touch {
   background: var(--zone-buy);
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
@@ -960,12 +936,6 @@ h1 {
   background: var(--zone-sell);
   clip-path: polygon(0 0, 100% 0, 50% 100%);
   margin-left: -4px;
-}
-
-.swatch.touch-long {
-  background: var(--zone-buy);
-  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
-  width: 10px;
 }
 
 .legend-item {
@@ -1042,10 +1012,6 @@ h1 {
 }
 
 .touch-note.st_buy,
-.touch-note.lt_buy {
-  color: var(--zone-buy);
-}
-
 .touch-note.st_sell {
   color: var(--zone-sell);
 }
@@ -1157,34 +1123,8 @@ h1 {
   opacity: 0.16;
 }
 
-.zone-layer.long.buy .zone-fill {
-  fill: url(#hatch-buy);
-  opacity: 0.55;
-}
-
-.zone-layer.long.sell .zone-fill {
-  fill: url(#hatch-sell);
-  opacity: 0.55;
-}
-
 .zone-fill.next {
   opacity: 0.32 !important;
-}
-
-.zone-layer.long .zone-fill.next {
-  opacity: 0.8 !important;
-}
-
-.hatch-line {
-  stroke-width: 1.4;
-}
-
-.hatch-line.buy {
-  stroke: var(--zone-buy);
-}
-
-.hatch-line.sell {
-  stroke: var(--zone-sell);
 }
 
 .zone-edge {
@@ -1199,10 +1139,6 @@ h1 {
 
 .zone-layer.sell .zone-edge {
   stroke: var(--zone-sell);
-}
-
-.zone-layer.long .zone-edge {
-  stroke-dasharray: 5 3;
 }
 
 .stretch-band {

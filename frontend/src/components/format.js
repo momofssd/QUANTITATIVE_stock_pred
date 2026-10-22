@@ -8,7 +8,6 @@ export const points = (value) => {
   const rounded = Math.round(value * 100);
   return rounded === 0 ? "±0 pts" : `${rounded > 0 ? "+" : ""}${rounded} pts`;
 };
-export const signedR = (value) => (isNumber(value) ? `${value > 0 ? "+" : ""}${value.toFixed(2)}R` : "-");
 export const fixed = (value, digits = 2) => (isNumber(value) ? value.toFixed(digits) : "-");
 export const range = (zone) => (zone ? `${dollar(zone.low)} – ${dollar(zone.high)}` : "-");
 export const ordinal = (fraction) => {

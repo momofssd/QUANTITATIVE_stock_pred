@@ -7,7 +7,6 @@ const SECTIONS = [
   ["short_term_markdown", "Short-term plan"],
   ["historical_replay_markdown", "Historical replay"],
   ["trend_outlook_markdown", "Trend outlook"],
-  ["long_term_markdown", "Long-term plan"],
 ];
 
 const VIEW_LABELS = {
@@ -20,16 +19,6 @@ const VIEW_LABELS = {
   BOUNCE_UNDERWAY: "Bounce underway",
   WAIT_FOR_PULLBACK: "Wait for pullback",
   TAKE_PROFIT_ZONE: "Take-profit zone",
-  ADD_CONFIRMED: "Add shares: dip confirmed",
-  DIP_STILL_FALLING: "In buy area, still falling",
-  BOUNCED_LOW_RR: "Dip already bounced",
-  VALUE_ZONE_LOW_RR: "In value zone, above buy area",
-  BELOW_LONG_TERM_STOP: "Below long-term stop",
-  DEEP_VALUE_TREND_RISK: "Below value zone",
-  APPROACHING_VALUE: "Approaching value zone",
-  HOLD_WAIT: "Hold / wait",
-  APPROACHING_TRIM: "Approaching trim zone",
-  TRIM_ZONE: "Trim zone",
 };
 
 const viewLabel = (code) => VIEW_LABELS[code] || code?.replaceAll("_", " ").toLowerCase() || "-";
@@ -82,9 +71,6 @@ export default function AiPanel({ interpretation, loading, error, disabled, onGe
             <div className="ai-views">
               <span>
                 Short-term: <strong>{viewLabel(interpretation.short_term_view)}</strong>
-              </span>
-              <span>
-                Long-term: <strong>{viewLabel(interpretation.long_term_view)}</strong>
               </span>
             </div>
             {interpretation.headline && <p className="ai-headline">{interpretation.headline}</p>}

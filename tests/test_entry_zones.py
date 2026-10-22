@@ -11,9 +11,6 @@ from src.entry_zones import (
     adjusted_ohlcv,
     breakdown_study,
     compute_zone_frame,
-    forward_return_study,
-    high_rr_entry,
-    long_term_plan_study,
     position_in_zone,
     reversion_study,
     swing_support,
@@ -53,7 +50,7 @@ def test_zone_levels_are_causal():
     full = compute_zone_frame(adjusted_ohlcv(features))
     cutoff = 1200
     truncated = compute_zone_frame(adjusted_ohlcv(features.iloc[:cutoff]))
-    columns = ["st_buy_low", "st_buy_high", "st_sell_low", "lt_buy_low", "lt_sell_high", "next_st_buy_high", "lt_stop", "next_lt_stop"]
+    columns = ["st_buy_low", "st_buy_high", "st_sell_low", "st_sell_high", "next_st_buy_high"]
     pd.testing.assert_frame_equal(full[columns].iloc[:cutoff], truncated[columns])
 
 
@@ -61,7 +58,6 @@ def test_short_term_zones_are_ordered_around_the_mean():
     zones = compute_zone_frame(adjusted_ohlcv(_features())).iloc[-1]
     assert zones["next_st_buy_low"] < zones["next_st_buy_high"] < zones["ema20"]
     assert zones["ema20"] < zones["next_st_sell_low"] < zones["next_st_sell_high"]
-    assert zones["next_lt_buy_low"] < zones["next_lt_buy_high"] < zones["next_lt_sell_low"] < zones["next_lt_sell_high"]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +115,8 @@ def test_zone_report_shape_and_json_serializable():
     json.dumps(report)
     assert report["ticker"] == "TEST"
     assert report["analysis_type"] == "price_zones"
-    short_term, long_term = report["short_term"], report["long_term"]
+    short_term = report["short_term"]
+    assert "long_term" not in report
     assert short_term["action"] in {
         "SUPPORT_BREAKDOWN", "ENTRY_CONFIRMED", "ENTRY_ZONE_BOUNCE_FORMING", "ENTRY_ZONE", "BELOW_ENTRY_ZONE",
         "APPROACHING_ENTRY", "BOUNCE_UNDERWAY", "WAIT_FOR_PULLBACK", "TAKE_PROFIT_ZONE",
@@ -131,12 +128,12 @@ def test_zone_report_shape_and_json_serializable():
     assert "recent_episodes" not in short_term["history"]["breakdown"]
     assert short_term["breakdown"]["status"] in {"NONE", "ACTIVE", "RECLAIMED"}
     assert "recent_episodes" not in short_term["history"]["buy_zone"]
-    assert long_term["available"] is True
     assert len(short_term["bounce_readiness"]["checks"]) == short_term["bounce_readiness"]["max_score"]
     points = report["chart_data"]["points"]
     assert len(points) == min(len(_features()), 2520)
     assert set(report["trend_outlook"]) == {"short_term", "long_term"}
-    assert {"st_buy_low", "st_buy_high", "lt_sell_high", "stretch", "stretch_p05"} <= set(points[-1])
+    assert {"st_buy_low", "st_buy_high", "st_sell_high", "stretch", "stretch_p05"} <= set(points[-1])
+    assert not any(key.startswith("lt_") for key in points[-1])
 
 
 def test_positive_tone_requires_historical_edge():
@@ -146,9 +143,8 @@ def test_positive_tone_requires_historical_edge():
         assert short_term["historical_edge"]["grade"] in {"EDGE", "SLIGHT_EDGE"}
 
 
-def test_long_term_zones_unavailable_on_short_history():
+def test_short_history_still_builds_short_term_zones():
     report = build_zone_report(_features(sessions=400), ticker="test")
-    assert report["long_term"]["available"] is False
     assert report["short_term"]["buy_zone"]["low"] is not None
 
 
@@ -224,97 +220,6 @@ def test_close_above_swing_low_is_not_a_breakdown():
     short_term = build_zone_report(features, ticker="test")["short_term"]
     assert short_term["action"] != "SUPPORT_BREAKDOWN"
     assert short_term["breakdown"]["active"] is False
-
-
-def test_high_rr_entry_gives_the_requested_reward_to_risk_capped_at_the_zone():
-    entry = high_rr_entry(80.0, 120.0, 200.0, 3.0)
-    assert (120 - entry) / (entry - 80) == pytest.approx(3.0)
-    assert high_rr_entry(80.0, 120.0, 85.0, 3.0) == 85.0
-
-
-def test_long_term_zone_replay_reports_any_day_baseline():
-    ohlc = adjusted_ohlcv(_features())
-    study = forward_return_study(ohlc, compute_zone_frame(ohlc), "buy")
-    assert 0 <= study["baseline_success_rate"] <= 1
-    assert study["edge_vs_baseline"] == pytest.approx(study["success_rate"] - study["baseline_success_rate"], abs=1e-3)
-
-
-def test_long_term_plan_study_only_adds_after_a_confirmed_dip():
-    ohlc = adjusted_ohlcv(_features(sessions=2500))
-    zones = compute_zone_frame(ohlc)
-    study = long_term_plan_study(ohlc, zones)
-    assert study["episodes"] >= 3
-    assert study["edge_r"] == pytest.approx(study["expectancy_r"] - study["baseline_expectancy_r"], abs=0.011)
-    assert 0 <= study["probability_no_better_than_baseline"] <= 1
-    highs, lows, atr = ohlc["high"].to_numpy(), ohlc["low"].to_numpy(), zones["atr"].to_numpy()
-    for episode in study["recent_episodes"]:
-        i = episode["index"]
-        # The add is a close above the prior 10-session high, after the dip, with the stop under the dip's low.
-        assert episode["entry"] > highs[i - 10:i].max()
-        assert episode["stop"] < episode["dip_low"] <= lows[i]
-        assert episode["stop"] >= episode["dip_low"] - 0.5 * atr[i] - 1e-9
-        assert episode["planned_rr"] >= 2.0 - 1e-9
-        if episode["outcome"] == "success":
-            assert episode["r_multiple"] == pytest.approx(episode["planned_rr"])
-        elif episode["outcome"] == "failed":
-            assert episode["r_multiple"] <= -1 + 1e-9
-
-
-def _long_term_report(price_from_plan):
-    """Re-run the report with the last close moved to a price chosen from the original plan."""
-    features = _features(sessions=2500)
-    plan = build_zone_report(features, ticker="test")["long_term"]["trade_plan"]
-    moved = features.copy()
-    price = price_from_plan(plan)
-    for column in ("Open", "High", "Low", "Close", "Adj Close"):
-        moved.iloc[-1, moved.columns.get_loc(column)] = price
-    moved["close"] = moved["Adj Close"]
-    return build_zone_report(moved, ticker="test")["long_term"]
-
-
-def _dip_report(last_close: float):
-    """Fall from 10% above the buy area to 7% below it over 24 sessions, then close at `last_close` x buy area."""
-    features = _features(sessions=2500)
-    buy_area = build_zone_report(features, ticker="test")["long_term"]["trade_plan"]["buy_area"]
-    path = np.concatenate([np.linspace(1.10, 0.95, 15), np.linspace(0.945, 0.93, 9), [last_close]]) * buy_area
-    rows = features.index[-len(path):]
-    for column, values in (("Open", path), ("High", path * 1.003), ("Low", path * 0.997), ("Close", path), ("Adj Close", path)):
-        features.loc[rows, column] = values
-    features["close"] = features["Adj Close"]
-    return build_zone_report(features, ticker="test")["long_term"]
-
-
-def test_long_term_plan_fields_are_consistent():
-    long_term = build_zone_report(_features(sessions=2500), ticker="test")["long_term"]
-    plan = long_term["trade_plan"]
-    assert plan["status"] in {"ADD_CONFIRMED", "DIP_STILL_FALLING", "BOUNCED_LOW_RR", "NO_DIP"}
-    assert plan["stop"] < plan["target"]
-    assert plan["buy_area"] <= long_term["buy_zone"]["high"]
-    assert set(long_term["history"]) == {"buy_zone", "sell_zone", "plan"}
-    if long_term["tone"] == "positive":
-        assert long_term["historical_edge"]["grade"] in {"EDGE", "SLIGHT_EDGE"}
-
-
-def test_dip_that_keeps_falling_is_not_an_add():
-    long_term = _dip_report(0.92)
-    assert long_term["action"] == "DIP_STILL_FALLING"
-    assert long_term["tone"] != "positive"
-    assert long_term["trade_plan"]["confirm_above"] > 0.92 * long_term["trade_plan"]["buy_area"]
-
-
-def test_dip_that_closes_above_the_prior_high_is_an_add_with_the_stop_under_the_dip():
-    long_term = _dip_report(0.97)
-    plan = long_term["trade_plan"]
-    assert long_term["action"] == "ADD_CONFIRMED"
-    assert plan["stop"] < plan["dip_low"] and plan["stop_under_dip"]
-    assert plan["reward_risk_now"] >= 2.0
-
-
-def test_price_below_the_long_term_stop_invalidates_the_plan():
-    long_term = _long_term_report(lambda plan: plan["stop"] * 0.95)
-    assert long_term["action"] == "BELOW_LONG_TERM_STOP"
-    assert long_term["tone"] == "negative"
-    assert long_term["trade_plan"]["reward_risk_now"] is None
 
 
 def test_hourly_bars_group_into_two_adjusted_4h_candles_per_session():

@@ -43,19 +43,11 @@ const BAR_SIZES = [
 const ZONES = [
   { key: "st_buy", label: "ST buy", kind: "buy", term: "short" },
   { key: "st_sell", label: "ST take-profit", kind: "sell", term: "short" },
-  { key: "lt_buy", label: "LT value", kind: "buy", term: "long" },
-  { key: "lt_sell", label: "LT trim", kind: "sell", term: "long" },
 ];
 
-const TOUCH_LABELS = { st_buy: "Buy-zone touch", st_sell: "Sell-zone touch", lt_buy: "Long-term add (confirmed dip)" };
+const TOUCH_LABELS = { st_buy: "Buy-zone touch", st_sell: "Sell-zone touch" };
 
 function outcomeText(zone, outcome) {
-  if (zone === "lt_buy") {
-    if (outcome === "success") return "reached the trim-zone target before the stop";
-    if (outcome === "failed") return "hit the long-term stop first";
-    if (outcome === "expired") return "neither level within 250 sessions";
-    return "still open";
-  }
   if (outcome === "success") return zone === "st_buy" ? "bounced 1.5 ATR before dropping 1.5 ATR" : "pulled back 1.5 ATR before extending 1.5 ATR";
   if (outcome === "failed") return zone === "st_buy" ? "dropped 1.5 ATR first" : "extended 1.5 ATR higher first";
   if (outcome === "expired") return "no decision within 10 sessions";
@@ -165,15 +157,6 @@ function spreadLabels(labels, minimumGap, top, bottom) {
   return arranged;
 }
 
-function Diamond({ x, y, className, title }) {
-  const size = 5.5;
-  return (
-    <polygon className={className} points={`${x},${y - size} ${x + size},${y} ${x},${y + size} ${x - size},${y}`}>
-      <title>{title}</title>
-    </polygon>
-  );
-}
-
 function Triangle({ x, y, up, className, title }) {
   const size = 5;
   const points = up
@@ -186,13 +169,13 @@ function Triangle({ x, y, up, className, title }) {
   );
 }
 
-export default function MarketChart({ chart, shortTerm, longTerm }) {
+export default function MarketChart({ chart, shortTerm }) {
   // `range` is the number of daily sessions shown; `offset` is how many sessions the right edge sits before the latest.
   const [view, setView] = useState({ range: 126, offset: 0 });
   const [priceHeight, setPriceHeight] = useState(DEFAULT_PRICE_HEIGHT);
   const [dragging, setDragging] = useState(false);
   const [lowerStudy, setLowerStudy] = useState("STRETCH");
-  const [layers, setLayers] = useState({ short: true, long: true, shortTouches: true, longTouches: true });
+  const [layers, setLayers] = useState({ short: true, shortTouches: true });
   const [activeIndex, setActiveIndex] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
@@ -280,8 +263,6 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   const nextZones = {
     st_buy: shortTerm?.buy_zone,
     st_sell: shortTerm?.sell_zone,
-    lt_buy: longTerm?.available ? longTerm.buy_zone : null,
-    lt_sell: longTerm?.available ? longTerm.sell_zone : null,
   };
   const shownZones = ZONES.filter((zone) => layers[zone.term]);
   const plotRight = WIDTH - RIGHT;
@@ -296,8 +277,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   zoomRef.current = { dataRight: nextStart, total: totalSessions };
 
   const priceValues = visiblePoints.flatMap((point) => [point.high, point.low, point.ema20, point.ma50, point.ma200].filter(valid));
-  // Long-term zones can sit far from price; they are clipped to the pane instead of stretching the scale.
-  shownZones.filter((zone) => zone.term === "short").forEach((zone) => {
+  shownZones.forEach((zone) => {
     visiblePoints.forEach((point) => priceValues.push(...[point[`${zone.key}_low`], point[`${zone.key}_high`]].filter(valid)));
     const next = nextZones[zone.key];
     if (next) priceValues.push(...[next.low, next.high].filter(valid));
@@ -322,13 +302,10 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         .filter((zone) => nextZones[zone.key] && valid(nextZones[zone.key].low) && valid(nextZones[zone.key].high))
         .map((zone) => {
           const next = nextZones[zone.key];
-          const above = next.low > priceHigh;
-          const below = next.high < priceLow;
-          const anchor = Math.min(Math.max((next.low + next.high) / 2, priceLow), priceHigh);
           return {
             ...zone,
-            anchorY: priceY(anchor),
-            text: `${above ? "↑ " : below ? "↓ " : ""}${zone.label} ${money(next.low)}–${money(next.high)}`,
+            anchorY: priceY((next.low + next.high) / 2),
+            text: `${zone.label} ${money(next.low)}–${money(next.high)}`,
           };
         }),
       { key: "last", kind: "last", anchorY: priceY(latest.close), text: `${atLatest ? "Last" : latest.date} ${money(latest.close)}` },
@@ -363,7 +340,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
   );
   const firstVisibleYear = visiblePoints[0].date.slice(0, 4);
   const hovered = visiblePoints[Math.min(activeIndex ?? latestIndex, latestIndex)];
-  const markerZones = [...(layers.shortTouches ? ["st_buy", "st_sell"] : []), ...(layers.longTouches ? ["lt_buy"] : [])];
+  const markerZones = layers.shortTouches ? ["st_buy", "st_sell"] : [];
   const hoveredTouches = markerZones.map((zone) => touchesByDate.get(`${hovered.key}:${zone}`)).filter(Boolean);
   const barName = BAR_SIZES.find((size) => size.key === barSize).name;
   const hoveredLabel = barSize === "1W" ? `Week of ${hovered.date}` : barSize === "4H" ? `${hovered.date} ${hovered.time}` : hovered.date;
@@ -441,8 +418,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         <div>
           <h2>Price and entry zones</h2>
           <p>
-            Zones move with the trend. The block at the right edge is next session's zones; ↑/↓ marks a long-term zone outside
-            the visible range. Scroll to zoom, drag to pan, double-click to reset, and drag the bar under the chart to resize it.
+            Zones move with the trend. The block at the right edge is next session's zones. Scroll to zoom, drag to pan, double-click to reset, and drag the bar under the chart to resize it.
           </p>
         </div>
         <div className="toolbar-controls">
@@ -493,17 +469,9 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
           <span className="swatch zone-short" /> Short-term zones
         </label>
         <label className="layer-toggle">
-          <input checked={layers.long} onChange={() => toggle("long")} type="checkbox" />
-          <span className="swatch zone-long" /> Long-term zones
-        </label>
-        <label className="layer-toggle">
           <input checked={layers.shortTouches} onChange={() => toggle("shortTouches")} type="checkbox" />
           <span className="swatch touch" />
           <span className="swatch touch sell" /> Short-term touches
-        </label>
-        <label className="layer-toggle">
-          <input checked={layers.longTouches} onChange={() => toggle("longTouches")} type="checkbox" />
-          <span className="swatch touch-long" /> Long-term adds
         </label>
         <span className="legend-item ma20">EMA20</span>
         <span className="legend-item ma50">MA50</span>
@@ -534,7 +502,7 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
         </span>
       </div>
       <svg
-        aria-label="Daily candlestick chart with short-term and long-term buy and sell zones"
+        aria-label="Daily candlestick chart with short-term buy and sell zones"
         className={`market-chart${dragging ? " panning" : ""}`}
         onDoubleClick={() => setView({ range: Math.min(126, totalSessions), offset: 0 })}
         onPointerCancel={endDrag}
@@ -551,11 +519,6 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
           <clipPath id="price-pane">
             <rect height={PRICE_HEIGHT} width={plotRight - LEFT} x={LEFT} y={TOP} />
           </clipPath>
-          {["buy", "sell"].map((kind) => (
-            <pattern height="7" id={`hatch-${kind}`} key={kind} patternTransform="rotate(45)" patternUnits="userSpaceOnUse" width="7">
-              <line className={`hatch-line ${kind}`} x1="0" x2="0" y1="0" y2="7" />
-            </pattern>
-          ))}
         </defs>
         {gridPrices.map((price) => (
           <g key={price}>
@@ -625,18 +588,6 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
             markerZones.map((zone) => {
               const touch = touchesByDate.get(`${point.key}:${zone}`);
               if (!touch) return null;
-              if (zone === "lt_buy") {
-                // Sits below the short-term triangle so both stay visible on the same bar.
-                return (
-                  <Diamond
-                    className={`touch-marker buy long ${touch.outcome}`}
-                    key={`${zone}-${point.key}`}
-                    title={`${touch.date} long-term add at ${money(touch.entry)}: ${outcomeText(zone, touch.outcome)}`}
-                    x={xAt(index)}
-                    y={Math.min(priceY(point.low) + 24, TOP + PRICE_HEIGHT + 6)}
-                  />
-                );
-              }
               const buy = zone === "st_buy";
               const y = buy ? priceY(point.low) + 10 : priceY(point.high) - 10;
               return (
@@ -746,9 +697,8 @@ export default function MarketChart({ chart, shortTerm, longTerm }) {
       </div>
       <p className="chart-footnote">
         ▲ below a candle = first touch of the short-term buy zone; ▼ above = first touch of the take-profit zone. Filled = price
-        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. ◆ = long-term add after a confirmed
-        dip (at least 20 sessions apart); filled = reached the trim-zone target before the stop under the dip. Dashed = outcome still open. Hover a marker
-        for details.
+        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. Dashed = outcome still open. Hover a marker for
+        details.
       </p>
     </section>
   );

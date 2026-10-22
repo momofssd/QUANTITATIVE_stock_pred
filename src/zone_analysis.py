@@ -13,17 +13,6 @@ import pandas as pd
 from .data_loader import MarketDataUnavailableError, download_intraday, load_market_data
 from .entry_zones import (
     BOUNCE_ATR,
-    DIP_STOP_ATR,
-    LONG_TERM_ADD_MIN_RR,
-    LONG_TERM_ARM_SESSIONS,
-    LONG_TERM_BUY_PCTL,
-    LONG_TERM_HORIZON,
-    LONG_TERM_LOOKBACK,
-    LONG_TERM_MIN_RR,
-    LONG_TERM_PLAN_HORIZON,
-    LONG_TERM_RECLAIM_SESSIONS,
-    LONG_TERM_STOP_PCTL,
-    LONG_TERM_SELL_PCTL,
     SHORT_TERM_BUY_PCTL,
     SHORT_TERM_HORIZON,
     SHORT_TERM_LOOKBACK,
@@ -35,9 +24,6 @@ from .entry_zones import (
     breakdown_study,
     compute_zone_frame,
     confirmation_study,
-    forward_return_study,
-    long_term_add_state,
-    long_term_plan_study,
     position_in_zone,
     reversion_study,
     swing_levels,
@@ -65,20 +51,6 @@ SHORT_TERM_ACTIONS = {
     "WAIT_FOR_PULLBACK": ("Wait for pullback", "neutral", "Price is between zones; wait for a pullback into the buy zone."),
     "TAKE_PROFIT_ZONE": ("Take-profit zone", "negative", "Price is stretched into the short-term sell zone; take profits on existing longs and avoid new entries."),
 }
-
-LONG_TERM_ACTIONS = {
-    "ADD_CONFIRMED": ("Add shares: dip confirmed", "positive", f"Price reached the long-term buy area and then closed above its prior {LONG_TERM_RECLAIM_SESSIONS}-session high, so the selling has paused. The add is wrong if price breaks the dip's low (the stop)."),
-    "DIP_STILL_FALLING": ("In buy area, still falling", "caution", f"Price reached the long-term buy area but is still making lower highs. Do not add yet: wait for a close above the prior {LONG_TERM_RECLAIM_SESSIONS}-session high. A dip that keeps falling may be breaking support."),
-    "BOUNCED_LOW_RR": ("Dip already bounced", "neutral", f"Price turned up from the buy area, but too far to offer {LONG_TERM_ADD_MIN_RR:g}:1 from here. Wait for the next dip rather than chasing."),
-    "VALUE_ZONE_LOW_RR": ("In value zone, above buy area", "caution", f"Price is inside the long-term value zone but above the {LONG_TERM_MIN_RR:g}:1 buy area, where the stop is too far away. Wait for the buy area and a confirmed turn."),
-    "DEEP_VALUE_TREND_RISK": ("Below value zone", "caution", "Price is cheaper than the value zone but has not reached the buy area; the long-term trend may be breaking. Wait for a confirmed turn."),
-    "BELOW_LONG_TERM_STOP": ("Below long-term stop", "negative", "Price is further below its 200-day average than on 98% of sessions in the last five years; the long-term plan is invalidated until price recovers above the stop."),
-    "APPROACHING_VALUE": ("Approaching value zone", "caution", "Price is close to the long-term value zone."),
-    "HOLD_WAIT": ("Hold / wait", "neutral", "Price is between the long-term value and trim zones."),
-    "APPROACHING_TRIM": ("Approaching trim zone", "caution", "Price is close to the long-term trim zone; avoid adding."),
-    "TRIM_ZONE": ("Trim zone", "negative", "Price is extended far above its 200-day average; consider trimming long-term holdings."),
-}
-
 
 def _zone_payload(frame: pd.DataFrame, key: str, close: float, near_band: float, kind: str, percentiles: tuple[float, float], basis: str, confluence: list[str]) -> dict:
     last = frame.iloc[-1]
@@ -110,32 +82,6 @@ def _edge_grade(study: dict) -> dict:
     else:
         grade, label = "NO_EDGE", "No better than an average day"
     return {"grade": grade, "label": label, "edge_vs_baseline": edge, "success_rate": study.get("success_rate"), "baseline_success_rate": study.get("baseline_success_rate"), "episodes": study.get("episodes")}
-
-
-def _r_edge_grade(study: dict) -> dict:
-    """Grade confirmed adds against buying on any day.
-
-    An edge only counts if it survives dropping the single best trade; EDGE also needs the
-    bootstrap to put at most a 10% chance on the average being no better than any day.
-    """
-    edge, without_best = study.get("edge_r"), study.get("edge_without_best_r")
-    luck = study.get("probability_no_better_than_baseline")
-    if not study.get("sufficient_sample") or edge is None:
-        grade, label = "THIN_SAMPLE", "Too few past confirmed adds to judge"
-    elif edge <= 0:
-        grade, label = "NO_EDGE", "Confirmed adds did no better than any day"
-    elif without_best is None or without_best <= 0:
-        grade, label = "NO_EDGE", "Edge came from one trade"
-    elif edge >= 0.25 and luck is not None and luck <= 0.10:
-        grade, label = "EDGE", "Confirmed adds beat buying on any day"
-    else:
-        grade, label = "SLIGHT_EDGE", "Confirmed adds beat any day, not proven"
-    return {
-        "grade": grade, "label": label, "edge_r": edge, "edge_without_best_r": without_best,
-        "probability_no_better_than_baseline": luck, "expectancy_r": study.get("expectancy_r"),
-        "median_r": study.get("median_r"), "baseline_expectancy_r": study.get("baseline_expectancy_r"),
-        "episodes": study.get("episodes"),
-    }
 
 
 def _trim_study(study: dict) -> dict:
@@ -305,101 +251,6 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
     return view, buy_study, sell_study
 
 
-def _long_term_view(ohlc: pd.DataFrame, zones: pd.DataFrame, swings: list[dict]) -> tuple[dict, dict | None, dict | None]:
-    last = zones.iloc[-1]
-    if not np.isfinite(last[["next_lt_buy_low", "next_lt_buy_high", "next_lt_sell_low", "next_lt_sell_high"]].astype(float)).all():
-        return {
-            "available": False,
-            "action": "INSUFFICIENT_HISTORY",
-            "action_label": "Insufficient history",
-            "tone": "neutral",
-            "action_definition": "Long-term zones need at least about two years of daily history. Choose an earlier start date.",
-        }, None, None
-    close = float(ohlc["close"].iloc[-1])
-    atr = float(last["atr"])
-    near_band = max(2 * atr, 0.03 * close)
-    anchors = {"50-day MA": float(last["ma50"]), "200-day MA": float(last["ma200"])}
-    buy_low, buy_high = float(last["next_lt_buy_low"]), float(last["next_lt_buy_high"])
-    sell_low, sell_high = float(last["next_lt_sell_low"]), float(last["next_lt_sell_high"])
-    buy_zone = _zone_payload(
-        zones, "lt_buy", close, near_band, "buy", LONG_TERM_BUY_PCTL,
-        "200-day MA adjusted by the ticker's 5th-25th percentile distance from it over the last 5 years",
-        zone_confluence(buy_low, buy_high, atr, anchors, swings, "buy"),
-    )
-    sell_zone = _zone_payload(
-        zones, "lt_sell", close, near_band, "sell", LONG_TERM_SELL_PCTL,
-        "200-day MA adjusted by the ticker's 85th-97th percentile distance from it over the last 5 years",
-        zone_confluence(sell_low, sell_high, atr, anchors, swings, "sell"),
-    )
-    buy_study = forward_return_study(ohlc, zones, "buy")
-    sell_study = forward_return_study(ohlc, zones, "sell")
-    plan_study = long_term_plan_study(ohlc, zones)
-    add = long_term_add_state(ohlc, zones)
-    long_term_stop = float(last["next_lt_stop"])
-    stop_under_dip = bool(add["armed"] and add["stop"] < add["dip_low"])
-
-    if sell_zone["position"] in {"INSIDE", "ABOVE"}:
-        action = "TRIM_ZONE"
-    elif close <= long_term_stop:
-        action = "BELOW_LONG_TERM_STOP"
-    elif add["status"] in {"ADD_CONFIRMED", "DIP_STILL_FALLING", "BOUNCED_LOW_RR"}:
-        action = add["status"]
-    elif buy_zone["position"] == "INSIDE":
-        action = "VALUE_ZONE_LOW_RR"
-    elif buy_zone["position"] == "BELOW":
-        action = "DEEP_VALUE_TREND_RISK"
-    elif buy_zone["position"] == "NEAR":
-        action = "APPROACHING_VALUE"
-    elif sell_zone["position"] == "NEAR":
-        action = "APPROACHING_TRIM"
-    else:
-        action = "HOLD_WAIT"
-    label, tone, definition = LONG_TERM_ACTIONS[action]
-    edge = _r_edge_grade(plan_study)
-    # As in the short-term view, a plan this ticker's history does not reward is never a green light.
-    if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
-        tone = "caution"
-    ma200 = zones["ma200"]
-    view = {
-        "available": True,
-        "horizon_sessions": LONG_TERM_HORIZON,
-        "action": action,
-        "action_label": label,
-        "tone": tone,
-        "action_definition": definition,
-        "historical_edge": edge,
-        "buy_zone": buy_zone,
-        "sell_zone": sell_zone,
-        "trade_plan": {
-            **add,
-            "buy_area_basis": (
-                f"highest price at or below the value-zone top that offers {LONG_TERM_MIN_RR:g}:1 to the target; "
-                f"reaching it arms the add for {LONG_TERM_ARM_SESSIONS} sessions"
-            ),
-            "confirm_basis": f"a close above the prior {LONG_TERM_RECLAIM_SESSIONS}-session high shows the selling has paused",
-            "stop_under_dip": stop_under_dip,
-            "stop_basis": (
-                f"{DIP_STOP_ATR:g} ATR under the dip's low: if the dip's low breaks, support has failed"
-                if stop_under_dip
-                else f"long-term stop: deeper below the 200-day MA than {1 - LONG_TERM_STOP_PCTL:.0%} of the last 5 years"
-                + ("; it is above the dip's low because the dip already undercut it intraday" if add["armed"] else
-                   "; an add's stop will sit under the dip's low")
-            ),
-            "target_basis": "bottom of the long-term trim zone",
-            "min_reward_risk": LONG_TERM_ADD_MIN_RR,
-            "confirm_sessions": LONG_TERM_RECLAIM_SESSIONS,
-            "horizon_sessions": LONG_TERM_PLAN_HORIZON,
-        },
-        "distance_from_ma200": {
-            "current_pct": clean_float(close / float(last["ma200"]) - 1),
-            "percentile": clean_float(percentile_rank(zones["lt_dev"], LONG_TERM_LOOKBACK)),
-            "ma200_rising": bool(ma200.iloc[-1] > ma200.iloc[-21]),
-        },
-        "history": {"buy_zone": _trim_study(buy_study), "sell_zone": _trim_study(sell_study), "plan": _trim_study(plan_study)},
-    }
-    return view, plan_study, sell_study
-
-
 def _four_hour_bars(intraday: pd.DataFrame | None, features: pd.DataFrame) -> list[dict]:
     """Group hourly bars into 4-hour candles per session, on the daily chart's dividend-adjusted basis.
 
@@ -435,7 +286,7 @@ def _chart_data(
     ohlc: pd.DataFrame,
     features: pd.DataFrame,
     zones: pd.DataFrame,
-    studies: dict[str, dict | None],
+    studies: dict[str, dict],
     intraday: pd.DataFrame | None = None,
 ) -> dict:
     window = ohlc.tail(CHART_PERIODS)
@@ -468,8 +319,6 @@ def _chart_data(
         points.append(point)
     events = []
     for key, study in studies.items():
-        if not study:
-            continue
         for episode in study["recent_episodes"]:
             if episode["index"] >= first_index:
                 events.append(
@@ -551,13 +400,12 @@ def build_zone_report(
         )
     swings = swing_levels(ohlc)
     short_term, st_buy_study, st_sell_study = _short_term_view(ohlc, features, zones, market_close, swings)
-    long_term, lt_plan_study, lt_sell_study = _long_term_view(ohlc, zones, swings)
     latest = features.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     previous_close = float(ohlc["close"].iloc[-2])
     ma200 = float(last["ma200"]) if np.isfinite(last["ma200"]) else None
     return {
-        "schema_version": "3.0",
+        "schema_version": "4.0",
         "analysis_type": "price_zones",
         "ticker": ticker.upper(),
         "as_of_date": str(features.index[-1].date()),
@@ -575,7 +423,6 @@ def build_zone_report(
             ),
         },
         "short_term": short_term,
-        "long_term": long_term,
         "trend_outlook": {key: trend_outlook(ohlc, zones, features, horizon) for key, horizon in TREND_HORIZONS.items()},
         "technical_indicators": {
             "ema20": clean_float(last["ema20"], 2),
@@ -592,17 +439,16 @@ def build_zone_report(
         "macro_context": build_macro_context(latest, benchmarks["treasury_yield"], benchmarks["oil"]),
         "chart_data": _chart_data(
             ohlc, features, zones,
-            {"st_buy": st_buy_study, "st_sell": st_sell_study, "lt_buy": lt_plan_study, "lt_sell": lt_sell_study},
+            {"st_buy": st_buy_study, "st_sell": st_sell_study},
             intraday,
         ),
         "methodology": {
             "summary": (
                 "Zones are calibrated from this ticker's own history, not predicted. Short-term zones measure how far "
-                "price is stretched from its 20-day EMA in ATR units; long-term zones measure distance from the 200-day MA. "
+                "price is stretched from its 20-day EMA in ATR units. "
                 "Each zone is replayed against every earlier visit to report how price behaved afterwards."
             ),
             "short_term_lookback_sessions": SHORT_TERM_LOOKBACK,
-            "long_term_lookback_sessions": LONG_TERM_LOOKBACK,
             "levels_apply_to": "next trading session; recompute after every daily close",
         },
         "not_financial_advice": True,

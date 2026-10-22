@@ -5,13 +5,11 @@ def test_gemini_interpreter_mock(monkeypatch):
     expected = {
         "ticker": "TSLA",
         "short_term_view": "APPROACHING_ENTRY",
-        "long_term_view": "HOLD_WAIT",
         "headline": "TSLA is about one ATR above its short-term buy zone.",
         "summary_markdown": "- Price is **1.9% above** the buy zone.",
         "short_term_markdown": "#### Where price is\nNear the zone.",
         "historical_replay_markdown": "| Setup | Worked |\n|---|---|\n| Buy at first touch | 58% |",
         "trend_outlook_markdown": "- 10 sessions: 61% bullish (base rate).",
-        "long_term_markdown": "Between the value and trim zones.",
         "key_reasons": ["Buy zone has beaten the baseline"],
         "main_risks": ["Price is below its 200-day average"],
         "data_cited": ["RSI(14) 44.0", "ATR 4.52"],

@@ -1,11 +1,9 @@
 # Quant Entry Zone Analyzer
 
-Python and React app that shows **where to buy and where to sell** a stock or ETF instead of predicting its price. It downloads daily OHLCV data, calibrates four price zones from the ticker's own history, and replays every earlier visit to each zone so you can see how price behaved afterwards.
+Python and React app that shows **where to buy and where to sell** a stock or ETF instead of predicting its price. It downloads daily OHLCV data, calibrates two short-term price zones from the ticker's own history, and replays every earlier visit to each zone so you can see how price behaved afterwards.
 
 - **Short-term buy zone**: where price would be stretched below its 20-day EMA by as much as the ticker's 5th-20th percentile over the last 3 years, measured in ATRs. This is the V-bounce entry area.
 - **Short-term take-profit zone**: the same stretch at the 80th-95th percentile above the EMA.
-- **Long-term value zone**: the 200-day MA adjusted by the ticker's 5th-25th percentile distance from it over the last 5 years.
-- **Long-term trim zone**: the same distance at the 85th-97th percentile.
 
 For each zone the dashboard tells you whether the current price is inside, near, below, or away from it, and how far it would have to move. Zones are not forecasts; the only forecast is the trend outlook described below. An analysis takes a few seconds.
 
@@ -37,9 +35,8 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 The React frontend shows:
 
 - **Short-term entry card**: action (`SUPPORT_BREAKDOWN`, `ENTRY_CONFIRMED`, `ENTRY_ZONE_BOUNCE_FORMING`, `ENTRY_ZONE`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`, `TAKE_PROFIT_ZONE`), current price, next-session buy and take-profit zones with distance, a stretch-percentile gauge, and the historical bounce statistics (or, after a support breakdown, the historical continuation statistics)
-- **Long-term card**: action (`ADD_CONFIRMED`, `DIP_STILL_FALLING`, `BOUNCED_LOW_RR`, `VALUE_ZONE_LOW_RR`, `DEEP_VALUE_TREND_RISK`, `BELOW_LONG_TERM_STOP`, `APPROACHING_VALUE`, `HOLD_WAIT`, `APPROACHING_TRIM`, `TRIM_ZONE`), the buy area, the confirmation price, the stop under the dip, the target, value and trim zones, distance from the 200-day MA, and the replay of past adds against buying on any day
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
-- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time (short-term solid, long-term hatched), next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ short-term buy/take-profit, ◆ long-term add after a confirmed dip), and a stretch / RSI / MACD lower pane
+- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time, next session's zones at the right edge, markers on earlier zone touches coloured by outcome (▲/▼ buy/take-profit), and a stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
 - **Bounce checklist**: stretched, oversold, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
 - **Short-term trade plan**: entry, stop, and targets that use the same 1.5 ATR bracket as the historical replay
@@ -57,21 +54,6 @@ The headline uses the model only when it beat the base rate out of sample (Brier
 ### Reading the bounce statistics
 
 A short-term setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close. The `historical_edge` grade compares the two, and an entry is never shown as a green light unless the ticker's own history shows an edge. The report also replays the "wait for a reversal close" entry so you can see whether waiting for confirmation helped for that ticker.
-
-### Long-term adds: buy the dip only after it stops falling
-
-The long-term signal is built for adding shares to a holding without buying in the middle of a decline:
-
-1. **Buy area**: the highest price at or below the value-zone top that offers at least 3:1 to the target. Reaching it _arms_ the add for 20 sessions; it is not a buy by itself.
-2. **Still falling → no add** (`DIP_STILL_FALLING`): while price stays at or below its prior 10-session high, the selling is not done and a dip that keeps falling may be breaking support.
-3. **Confirmed → add** (`ADD_CONFIRMED`): a close above the prior 10-session high, with at least 2:1 reward/risk from that close. If the turn has already gone too far for 2:1, the reading is `BOUNCED_LOW_RR`.
-4. **Stop under the dip**: 0.5 ATR below the dip's low, or the long-term stop if that is higher. If the dip's low breaks after the add, support has failed and the add is wrong.
-5. **Long-term stop**: the price that would put the ticker further below its 200-day MA than on 98% of sessions in the last 5 years. Below it nothing is added (`BELOW_LONG_TERM_STOP`).
-6. **Target**: the bottom of the long-term trim zone (85th percentile distance above the 200-day MA).
-
-Every past add (at least 20 sessions apart, levels fixed at the add, gaps through the stop exit at the open) is scored in **R**, the profit or loss as a multiple of the planned risk, and ends at the target, the stop, or after 250 sessions. The baseline buys every session's close with the long-term stop and the same target. Because a few large winners can carry an average, the replay also reports the median R, the edge without the single best add, a bootstrap "chance of luck" (how often the average would not beat the baseline), and the longest run of stop-outs. The edge grade is `EDGE` only when the edge is at least +0.25R, survives dropping the best add, and the chance of luck is 10% or less; `SLIGHT_EDGE` when it survives dropping the best add; otherwise `NO_EDGE`. `ADD_CONFIRMED` is shown as positive only with `EDGE` or `SLIGHT_EDGE`.
-
-The previous version bought as soon as price touched the 3:1 price. In 2022 it bought AAPL seven times and SMH nine times on the way down, every one stopped out. When this was built, on 15 large tickers, waiting for the confirmation cut the average longest losing run from 11.3 adds to 6.3, while the average edge over buying on any day stayed similar (+0.62R vs +0.50R; 10 of 15 positive). Only AAPL, GLD, JPM and META graded `EDGE`; NVDA, TSLA, AMZN, XLE, XLF, TLT, IWM and SMH showed no edge. The rule was chosen by comparing six variants on those same tickers, so treat the edge as optimistic.
 
 ### Support breakdowns
 
@@ -98,7 +80,7 @@ React:   http://127.0.0.1:5173
 
 The frontend calls `/api/analyze` for the zone report and can optionally call `/api/interpret` for the Gemini panel. In development, Vite proxies those requests to FastAPI; in production, FastAPI exposes `/api/*` directly and serves the built React application from `frontend/dist`. Gemini receives the report without the per-session chart rows and is instructed to explain the supplied levels and statistics, never to invent new ones.
 
-Long-term zones need roughly two years of history, and the replay is more reliable with more. The default history start is `2012-01-01`.
+Zones need roughly one year of history, and the replay is more reliable with more. The default history start is `2012-01-01`.
 
 ## API
 
@@ -128,7 +110,7 @@ Example `/analyze` input:
 }
 ```
 
-The response (`schema_version` 3.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `long_term`, `trend_outlook`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py), the trend outlook in [src/trend_probability.py](src/trend_probability.py), and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
+The response (`schema_version` 4.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `trend_outlook`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py), the trend outlook in [src/trend_probability.py](src/trend_probability.py), and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
 
 ## Render Deployment
 

@@ -4,7 +4,6 @@ import MarketChart from "./components/MarketChart";
 import {
   EvidenceTables,
   LevelLadder,
-  LongTermCard,
   ReadinessPanel,
   ReasonsPanel,
   ShortTermHero,
@@ -99,7 +98,6 @@ export default function App() {
   }
 
   const shortTerm = report?.short_term;
-  const longTerm = report?.long_term;
   const technical = report?.technical_indicators;
   const macro = report?.macro_context;
   const warnings = report?.data_quality?.warnings || [];
@@ -123,7 +121,7 @@ export default function App() {
             <p className="eyebrow">Price-zone research</p>
             <h1>{report?.ticker || form.ticker.toUpperCase()}</h1>
             <p className="subtitle">
-              Short-term bounce entries, long-term value zones, and sell zones
+              Short-term bounce entries and take-profit zones
               {report && ` | Data through ${report.as_of_date}`}
             </p>
           </div>
@@ -158,7 +156,7 @@ export default function App() {
               <p className="eyebrow">Start research</p>
               <h2>Find where to buy and where to sell.</h2>
               <p>
-                Enter a ticker and click <strong>Analyze</strong>. The app calibrates short-term and long-term buy and sell zones
+                Enter a ticker and click <strong>Analyze</strong>. The app calibrates short-term buy and sell zones
                 from the ticker's own history, tells you how close the current price is to an entry, and shows how often earlier
                 visits produced a V-shaped bounce.
               </p>
@@ -189,15 +187,14 @@ export default function App() {
             )}
             <section className="decision-grid">
               <ShortTermHero market={report.current_market} shortTerm={shortTerm} />
-              <LongTermCard longTerm={longTerm} />
             </section>
             <TrendOutlook outlook={report.trend_outlook} ticker={report.ticker} />
 
             <div className="dashboard-layout">
               <div className="main-column">
-                <MarketChart chart={report.chart_data} longTerm={longTerm} shortTerm={shortTerm} />
+                <MarketChart chart={report.chart_data} shortTerm={shortTerm} />
                 <ReasonsPanel shortTerm={shortTerm} />
-                <EvidenceTables longTerm={longTerm} shortTerm={shortTerm} />
+                <EvidenceTables shortTerm={shortTerm} />
                 <section className="details-grid">
                   <article className="panel">
                     <h2>Technical snapshot</h2>
@@ -246,12 +243,6 @@ export default function App() {
                     <strong>Short-term buy / take-profit</strong>
                     <p>{shortTerm.buy_zone.basis}; {shortTerm.sell_zone.basis}.</p>
                   </div>
-                  {longTerm.available && (
-                    <div>
-                      <strong>Long-term value / trim</strong>
-                      <p>{longTerm.buy_zone.basis}; {longTerm.sell_zone.basis}.</p>
-                    </div>
-                  )}
                   <div>
                     <strong>Bounce replay</strong>
                     <p>{shortTerm.history.buy_zone.definition}</p>
