@@ -571,6 +571,26 @@ h1 {
   color: var(--text);
 }
 
+.profile-side {
+  border-top: 1px solid var(--border);
+  padding: 10px 0 6px;
+}
+
+.profile-side-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.profile-reason {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
 .momentum-gauge + .gauge {
   margin-top: 16px;
 }

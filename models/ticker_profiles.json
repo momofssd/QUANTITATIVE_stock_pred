@@ -1,0 +1,1202 @@
+{
+  "QQQ": {
+    "ticker": "QQQ",
+    "trained_on": "2026-10-21",
+    "data_start": "2012-01-03",
+    "data_through": "2026-10-14",
+    "holdout_start": "2021-01-01",
+    "params": {
+      "fast": 8,
+      "slow": 21,
+      "buy_turn": 2,
+      "buy_touch": 3,
+      "sell_turn": 2,
+      "sell_touch": 5
+    },
+    "tuned": true,
+    "buy": {
+      "adopted": true,
+      "reason": "beat the default in training, did at least as well on the 2021+ holdout, and training scores predicted holdout results across the tested settings (rank correlation +0.38)",
+      "rank_correlation": 0.3845,
+      "settings": {
+        "fast": 8,
+        "slow": 21,
+        "buy_turn": 2,
+        "buy_touch": 3
+      },
+      "best_candidate": {
+        "fast": 8,
+        "slow": 21,
+        "buy_turn": 2,
+        "buy_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 51,
+          "expectancy_r": 0.428,
+          "baseline_expectancy_r": 0.167,
+          "edge_r": 0.2609,
+          "held_rate": 0.8235,
+          "baseline_held_rate": 0.5489
+        },
+        "train_blocks": [
+          {
+            "signals": 9,
+            "expectancy_r": 0.7272,
+            "baseline_expectancy_r": 0.1637,
+            "edge_r": 0.5636,
+            "held_rate": 0.8889,
+            "baseline_held_rate": 0.5104
+          },
+          {
+            "signals": 22,
+            "expectancy_r": 0.4552,
+            "baseline_expectancy_r": 0.0858,
+            "edge_r": 0.3694,
+            "held_rate": 0.8182,
+            "baseline_held_rate": 0.5205
+          },
+          {
+            "signals": 20,
+            "expectancy_r": 0.2633,
+            "baseline_expectancy_r": 0.2503,
+            "edge_r": 0.013,
+            "held_rate": 0.8,
+            "baseline_held_rate": 0.6019
+          }
+        ],
+        "train_score": 0.3153,
+        "eligible": true,
+        "holdout": {
+          "signals": 43,
+          "expectancy_r": 0.3403,
+          "baseline_expectancy_r": 0.1109,
+          "edge_r": 0.2294,
+          "held_rate": 0.6512,
+          "baseline_held_rate": 0.5069
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 69,
+          "expectancy_r": 0.2646,
+          "baseline_expectancy_r": 0.167,
+          "edge_r": 0.0976,
+          "held_rate": 0.6957,
+          "baseline_held_rate": 0.5489
+        },
+        "train_blocks": [
+          {
+            "signals": 13,
+            "expectancy_r": 0.3403,
+            "baseline_expectancy_r": 0.1637,
+            "edge_r": 0.1767,
+            "held_rate": 0.6154,
+            "baseline_held_rate": 0.5104
+          },
+          {
+            "signals": 32,
+            "expectancy_r": 0.3596,
+            "baseline_expectancy_r": 0.0858,
+            "edge_r": 0.2738,
+            "held_rate": 0.75,
+            "baseline_held_rate": 0.5205
+          },
+          {
+            "signals": 24,
+            "expectancy_r": 0.097,
+            "baseline_expectancy_r": 0.2503,
+            "edge_r": -0.1533,
+            "held_rate": 0.6667,
+            "baseline_held_rate": 0.6019
+          }
+        ],
+        "train_score": 0.0991,
+        "eligible": true,
+        "holdout": {
+          "signals": 50,
+          "expectancy_r": 0.088,
+          "baseline_expectancy_r": 0.1109,
+          "edge_r": -0.0229,
+          "held_rate": 0.56,
+          "baseline_held_rate": 0.5069
+        }
+      },
+      "settings_tested": 36
+    },
+    "sell": {
+      "adopted": false,
+      "reason": "the tuned setting did worse than the default on the 2021+ holdout",
+      "rank_correlation": -0.4,
+      "settings": {
+        "fast": 8,
+        "slow": 21,
+        "sell_turn": 2,
+        "sell_touch": 5
+      },
+      "best_candidate": {
+        "fast": 8,
+        "slow": 21,
+        "sell_turn": 3,
+        "sell_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 46,
+          "expectancy_r": -0.217,
+          "baseline_expectancy_r": -0.2368,
+          "edge_r": 0.0198,
+          "held_rate": 0.2609,
+          "baseline_held_rate": 0.2308
+        },
+        "train_blocks": [
+          {
+            "signals": 12,
+            "expectancy_r": -0.0988,
+            "baseline_expectancy_r": -0.1282,
+            "edge_r": 0.0294,
+            "held_rate": 0.25,
+            "baseline_held_rate": 0.195
+          },
+          {
+            "signals": 14,
+            "expectancy_r": -0.1393,
+            "baseline_expectancy_r": -0.212,
+            "edge_r": 0.0727,
+            "held_rate": 0.2143,
+            "baseline_held_rate": 0.2358
+          },
+          {
+            "signals": 20,
+            "expectancy_r": -0.3423,
+            "baseline_expectancy_r": -0.3309,
+            "edge_r": -0.0114,
+            "held_rate": 0.3,
+            "baseline_held_rate": 0.2487
+          }
+        ],
+        "train_score": 0.0302,
+        "eligible": true,
+        "holdout": {
+          "signals": 25,
+          "expectancy_r": -0.5177,
+          "baseline_expectancy_r": -0.0759,
+          "edge_r": -0.4418,
+          "held_rate": 0.32,
+          "baseline_held_rate": 0.3148
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 74,
+          "expectancy_r": -0.3887,
+          "baseline_expectancy_r": -0.2368,
+          "edge_r": -0.1519,
+          "held_rate": 0.2432,
+          "baseline_held_rate": 0.2308
+        },
+        "train_blocks": [
+          {
+            "signals": 18,
+            "expectancy_r": -0.4011,
+            "baseline_expectancy_r": -0.1282,
+            "edge_r": -0.2729,
+            "held_rate": 0.1667,
+            "baseline_held_rate": 0.195
+          },
+          {
+            "signals": 22,
+            "expectancy_r": -0.4312,
+            "baseline_expectancy_r": -0.212,
+            "edge_r": -0.2192,
+            "held_rate": 0.3182,
+            "baseline_held_rate": 0.2358
+          },
+          {
+            "signals": 34,
+            "expectancy_r": -0.3546,
+            "baseline_expectancy_r": -0.3309,
+            "edge_r": -0.0237,
+            "held_rate": 0.2353,
+            "baseline_held_rate": 0.2487
+          }
+        ],
+        "train_score": -0.1719,
+        "eligible": false,
+        "holdout": {
+          "signals": 51,
+          "expectancy_r": -0.2244,
+          "baseline_expectancy_r": -0.0759,
+          "edge_r": -0.1486,
+          "held_rate": 0.3333,
+          "baseline_held_rate": 0.3148
+        }
+      },
+      "settings_tested": 9
+    },
+    "snapshot": {
+      "start": "2012-01-01",
+      "end": "2026-10-15"
+    }
+  },
+  "VOO": {
+    "ticker": "VOO",
+    "trained_on": "2026-10-21",
+    "data_start": "2012-01-03",
+    "data_through": "2026-10-14",
+    "holdout_start": "2021-01-01",
+    "params": {
+      "fast": 5,
+      "slow": 13,
+      "buy_turn": 2,
+      "buy_touch": 5,
+      "sell_turn": 2,
+      "sell_touch": 5
+    },
+    "tuned": false,
+    "buy": {
+      "adopted": false,
+      "reason": "training scores did not predict holdout results across the tested settings (rank correlation -0.27), so the win is likely luck",
+      "rank_correlation": -0.2673,
+      "settings": {
+        "fast": 5,
+        "slow": 13,
+        "buy_turn": 2,
+        "buy_touch": 5
+      },
+      "best_candidate": {
+        "fast": 8,
+        "slow": 21,
+        "buy_turn": 1,
+        "buy_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 60,
+          "expectancy_r": 0.3563,
+          "baseline_expectancy_r": 0.1092,
+          "edge_r": 0.2472,
+          "held_rate": 0.6667,
+          "baseline_held_rate": 0.5529
+        },
+        "train_blocks": [
+          {
+            "signals": 11,
+            "expectancy_r": 0.8151,
+            "baseline_expectancy_r": 0.1193,
+            "edge_r": 0.6958,
+            "held_rate": 0.7273,
+            "baseline_held_rate": 0.5436
+          },
+          {
+            "signals": 24,
+            "expectancy_r": 0.1777,
+            "baseline_expectancy_r": 0.0558,
+            "edge_r": 0.122,
+            "held_rate": 0.6667,
+            "baseline_held_rate": 0.5311
+          },
+          {
+            "signals": 25,
+            "expectancy_r": 0.326,
+            "baseline_expectancy_r": 0.1561,
+            "edge_r": 0.1699,
+            "held_rate": 0.64,
+            "baseline_held_rate": 0.5807
+          }
+        ],
+        "train_score": 0.3292,
+        "eligible": true,
+        "holdout": {
+          "signals": 49,
+          "expectancy_r": 0.1071,
+          "baseline_expectancy_r": 0.1047,
+          "edge_r": 0.0024,
+          "held_rate": 0.551,
+          "baseline_held_rate": 0.5257
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 61,
+          "expectancy_r": 0.2763,
+          "baseline_expectancy_r": 0.1092,
+          "edge_r": 0.1671,
+          "held_rate": 0.6885,
+          "baseline_held_rate": 0.5529
+        },
+        "train_blocks": [
+          {
+            "signals": 11,
+            "expectancy_r": 0.3864,
+            "baseline_expectancy_r": 0.1193,
+            "edge_r": 0.2671,
+            "held_rate": 0.6364,
+            "baseline_held_rate": 0.5436
+          },
+          {
+            "signals": 28,
+            "expectancy_r": 0.3106,
+            "baseline_expectancy_r": 0.0558,
+            "edge_r": 0.2549,
+            "held_rate": 0.7143,
+            "baseline_held_rate": 0.5311
+          },
+          {
+            "signals": 22,
+            "expectancy_r": 0.1775,
+            "baseline_expectancy_r": 0.1561,
+            "edge_r": 0.0214,
+            "held_rate": 0.6818,
+            "baseline_held_rate": 0.5807
+          }
+        ],
+        "train_score": 0.1811,
+        "eligible": true,
+        "holdout": {
+          "signals": 49,
+          "expectancy_r": 0.0957,
+          "baseline_expectancy_r": 0.1047,
+          "edge_r": -0.009,
+          "held_rate": 0.551,
+          "baseline_held_rate": 0.5257
+        }
+      },
+      "settings_tested": 36
+    },
+    "sell": {
+      "adopted": false,
+      "reason": "the tuned setting did worse than the default on the 2021+ holdout",
+      "rank_correlation": -0.3833,
+      "settings": {
+        "fast": 5,
+        "slow": 13,
+        "sell_turn": 2,
+        "sell_touch": 5
+      },
+      "best_candidate": {
+        "fast": 5,
+        "slow": 13,
+        "sell_turn": 2,
+        "sell_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 77,
+          "expectancy_r": -0.0066,
+          "baseline_expectancy_r": -0.2306,
+          "edge_r": 0.224,
+          "held_rate": 0.2597,
+          "baseline_held_rate": 0.2434
+        },
+        "train_blocks": [
+          {
+            "signals": 21,
+            "expectancy_r": -0.4837,
+            "baseline_expectancy_r": -0.3263,
+            "edge_r": -0.1574,
+            "held_rate": 0.1905,
+            "baseline_held_rate": 0.1992
+          },
+          {
+            "signals": 29,
+            "expectancy_r": 0.2919,
+            "baseline_expectancy_r": -0.1309,
+            "edge_r": 0.4229,
+            "held_rate": 0.3103,
+            "baseline_held_rate": 0.2808
+          },
+          {
+            "signals": 27,
+            "expectancy_r": 0.0438,
+            "baseline_expectancy_r": -0.2691,
+            "edge_r": 0.3129,
+            "held_rate": 0.2593,
+            "baseline_held_rate": 0.2341
+          }
+        ],
+        "train_score": 0.1928,
+        "eligible": true,
+        "holdout": {
+          "signals": 52,
+          "expectancy_r": -0.1924,
+          "baseline_expectancy_r": -0.0923,
+          "edge_r": -0.1001,
+          "held_rate": 0.1923,
+          "baseline_held_rate": 0.2642
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 84,
+          "expectancy_r": -0.0915,
+          "baseline_expectancy_r": -0.2306,
+          "edge_r": 0.1391,
+          "held_rate": 0.25,
+          "baseline_held_rate": 0.2434
+        },
+        "train_blocks": [
+          {
+            "signals": 24,
+            "expectancy_r": -0.5528,
+            "baseline_expectancy_r": -0.3263,
+            "edge_r": -0.2265,
+            "held_rate": 0.1667,
+            "baseline_held_rate": 0.1992
+          },
+          {
+            "signals": 29,
+            "expectancy_r": 0.1874,
+            "baseline_expectancy_r": -0.1309,
+            "edge_r": 0.3183,
+            "held_rate": 0.3103,
+            "baseline_held_rate": 0.2808
+          },
+          {
+            "signals": 31,
+            "expectancy_r": 0.0047,
+            "baseline_expectancy_r": -0.2691,
+            "edge_r": 0.2738,
+            "held_rate": 0.2581,
+            "baseline_held_rate": 0.2341
+          }
+        ],
+        "train_score": 0.1219,
+        "eligible": true,
+        "holdout": {
+          "signals": 55,
+          "expectancy_r": -0.1412,
+          "baseline_expectancy_r": -0.0923,
+          "edge_r": -0.0489,
+          "held_rate": 0.2182,
+          "baseline_held_rate": 0.2642
+        }
+      },
+      "settings_tested": 9
+    },
+    "snapshot": {
+      "start": "2012-01-01",
+      "end": "2026-10-15"
+    }
+  },
+  "SMH": {
+    "ticker": "SMH",
+    "trained_on": "2026-10-21",
+    "data_start": "2012-01-03",
+    "data_through": "2026-10-14",
+    "holdout_start": "2021-01-01",
+    "params": {
+      "fast": 5,
+      "slow": 20,
+      "buy_turn": 2,
+      "buy_touch": 3,
+      "sell_turn": 2,
+      "sell_touch": 5
+    },
+    "tuned": true,
+    "buy": {
+      "adopted": true,
+      "reason": "beat the default in training, did at least as well on the 2021+ holdout, and training scores predicted holdout results across the tested settings (rank correlation +0.68)",
+      "rank_correlation": 0.6841,
+      "settings": {
+        "fast": 5,
+        "slow": 20,
+        "buy_turn": 2,
+        "buy_touch": 3
+      },
+      "best_candidate": {
+        "fast": 5,
+        "slow": 20,
+        "buy_turn": 2,
+        "buy_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 49,
+          "expectancy_r": 0.4817,
+          "baseline_expectancy_r": 0.2199,
+          "edge_r": 0.2617,
+          "held_rate": 0.7755,
+          "baseline_held_rate": 0.5595
+        },
+        "train_blocks": [
+          {
+            "signals": 8,
+            "expectancy_r": 0.998,
+            "baseline_expectancy_r": 0.1261,
+            "edge_r": 0.8719,
+            "held_rate": 0.875,
+            "baseline_held_rate": 0.5
+          },
+          {
+            "signals": 21,
+            "expectancy_r": 0.48,
+            "baseline_expectancy_r": 0.2176,
+            "edge_r": 0.2624,
+            "held_rate": 0.8095,
+            "baseline_held_rate": 0.5762
+          },
+          {
+            "signals": 20,
+            "expectancy_r": 0.277,
+            "baseline_expectancy_r": 0.2822,
+            "edge_r": -0.0052,
+            "held_rate": 0.7,
+            "baseline_held_rate": 0.5807
+          }
+        ],
+        "train_score": 0.3764,
+        "eligible": true,
+        "holdout": {
+          "signals": 48,
+          "expectancy_r": 0.375,
+          "baseline_expectancy_r": 0.1108,
+          "edge_r": 0.2642,
+          "held_rate": 0.6458,
+          "baseline_held_rate": 0.5028
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 63,
+          "expectancy_r": 0.3514,
+          "baseline_expectancy_r": 0.2199,
+          "edge_r": 0.1314,
+          "held_rate": 0.6984,
+          "baseline_held_rate": 0.5595
+        },
+        "train_blocks": [
+          {
+            "signals": 14,
+            "expectancy_r": 0.3198,
+            "baseline_expectancy_r": 0.1261,
+            "edge_r": 0.1937,
+            "held_rate": 0.6429,
+            "baseline_held_rate": 0.5
+          },
+          {
+            "signals": 24,
+            "expectancy_r": 0.4487,
+            "baseline_expectancy_r": 0.2176,
+            "edge_r": 0.2311,
+            "held_rate": 0.7917,
+            "baseline_held_rate": 0.5762
+          },
+          {
+            "signals": 25,
+            "expectancy_r": 0.2756,
+            "baseline_expectancy_r": 0.2822,
+            "edge_r": -0.0066,
+            "held_rate": 0.64,
+            "baseline_held_rate": 0.5807
+          }
+        ],
+        "train_score": 0.1394,
+        "eligible": true,
+        "holdout": {
+          "signals": 51,
+          "expectancy_r": 0.2672,
+          "baseline_expectancy_r": 0.1108,
+          "edge_r": 0.1563,
+          "held_rate": 0.5686,
+          "baseline_held_rate": 0.5028
+        }
+      },
+      "settings_tested": 36
+    },
+    "sell": {
+      "adopted": false,
+      "reason": "the best tuned setting beat the default by less than 0.05R in training",
+      "rank_correlation": 0.55,
+      "settings": {
+        "fast": 5,
+        "slow": 20,
+        "sell_turn": 2,
+        "sell_touch": 5
+      },
+      "best_candidate": {
+        "fast": 5,
+        "slow": 20,
+        "sell_turn": 2,
+        "sell_touch": 8
+      },
+      "candidate": {
+        "train": {
+          "signals": 87,
+          "expectancy_r": -0.1203,
+          "baseline_expectancy_r": -0.2149,
+          "edge_r": 0.0946,
+          "held_rate": 0.3908,
+          "baseline_held_rate": 0.2725
+        },
+        "train_blocks": [
+          {
+            "signals": 24,
+            "expectancy_r": 0.0493,
+            "baseline_expectancy_r": -0.2652,
+            "edge_r": 0.3145,
+            "held_rate": 0.4167,
+            "baseline_held_rate": 0.2614
+          },
+          {
+            "signals": 32,
+            "expectancy_r": -0.2169,
+            "baseline_expectancy_r": -0.2239,
+            "edge_r": 0.0071,
+            "held_rate": 0.2812,
+            "baseline_held_rate": 0.2517
+          },
+          {
+            "signals": 31,
+            "expectancy_r": -0.152,
+            "baseline_expectancy_r": -0.1739,
+            "edge_r": 0.0219,
+            "held_rate": 0.4839,
+            "baseline_held_rate": 0.3003
+          }
+        ],
+        "train_score": 0.1145,
+        "eligible": true,
+        "holdout": {
+          "signals": 59,
+          "expectancy_r": 0.0664,
+          "baseline_expectancy_r": -0.1367,
+          "edge_r": 0.2031,
+          "held_rate": 0.4237,
+          "baseline_held_rate": 0.3239
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 83,
+          "expectancy_r": -0.1582,
+          "baseline_expectancy_r": -0.2149,
+          "edge_r": 0.0567,
+          "held_rate": 0.3855,
+          "baseline_held_rate": 0.2725
+        },
+        "train_blocks": [
+          {
+            "signals": 23,
+            "expectancy_r": -0.0355,
+            "baseline_expectancy_r": -0.2652,
+            "edge_r": 0.2297,
+            "held_rate": 0.4348,
+            "baseline_held_rate": 0.2614
+          },
+          {
+            "signals": 30,
+            "expectancy_r": -0.2646,
+            "baseline_expectancy_r": -0.2239,
+            "edge_r": -0.0407,
+            "held_rate": 0.2667,
+            "baseline_held_rate": 0.2517
+          },
+          {
+            "signals": 30,
+            "expectancy_r": -0.1459,
+            "baseline_expectancy_r": -0.1739,
+            "edge_r": 0.0281,
+            "held_rate": 0.4667,
+            "baseline_held_rate": 0.3003
+          }
+        ],
+        "train_score": 0.0724,
+        "eligible": true,
+        "holdout": {
+          "signals": 58,
+          "expectancy_r": 0.0802,
+          "baseline_expectancy_r": -0.1367,
+          "edge_r": 0.2169,
+          "held_rate": 0.431,
+          "baseline_held_rate": 0.3239
+        }
+      },
+      "settings_tested": 9
+    },
+    "snapshot": {
+      "start": "2012-01-01",
+      "end": "2026-10-15"
+    }
+  },
+  "MU": {
+    "ticker": "MU",
+    "trained_on": "2026-10-21",
+    "data_start": "2012-01-03",
+    "data_through": "2026-10-14",
+    "holdout_start": "2021-01-01",
+    "params": {
+      "fast": 5,
+      "slow": 13,
+      "buy_turn": 2,
+      "buy_touch": 5,
+      "sell_turn": 3,
+      "sell_touch": 5
+    },
+    "tuned": true,
+    "buy": {
+      "adopted": false,
+      "reason": "training scores did not predict holdout results across the tested settings (rank correlation -0.07), so the win is likely luck",
+      "rank_correlation": -0.071,
+      "settings": {
+        "fast": 5,
+        "slow": 13,
+        "buy_turn": 2,
+        "buy_touch": 5
+      },
+      "best_candidate": {
+        "fast": 3,
+        "slow": 10,
+        "buy_turn": 3,
+        "buy_touch": 8
+      },
+      "candidate": {
+        "train": {
+          "signals": 41,
+          "expectancy_r": 0.3219,
+          "baseline_expectancy_r": 0.1077,
+          "edge_r": 0.2142,
+          "held_rate": 0.7073,
+          "baseline_held_rate": 0.5063
+        },
+        "train_blocks": [
+          {
+            "signals": 6,
+            "expectancy_r": 0.618,
+            "baseline_expectancy_r": 0.2978,
+            "edge_r": 0.3202,
+            "held_rate": 0.8333,
+            "baseline_held_rate": 0.5768
+          },
+          {
+            "signals": 22,
+            "expectancy_r": 0.3357,
+            "baseline_expectancy_r": 0.037,
+            "edge_r": 0.2987,
+            "held_rate": 0.6364,
+            "baseline_held_rate": 0.4795
+          },
+          {
+            "signals": 13,
+            "expectancy_r": 0.1619,
+            "baseline_expectancy_r": 0.057,
+            "edge_r": 0.1049,
+            "held_rate": 0.7692,
+            "baseline_held_rate": 0.4881
+          }
+        ],
+        "train_score": 0.2413,
+        "eligible": true,
+        "holdout": {
+          "signals": 32,
+          "expectancy_r": 0.6586,
+          "baseline_expectancy_r": 0.1481,
+          "edge_r": 0.5105,
+          "held_rate": 0.5938,
+          "baseline_held_rate": 0.4868
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 63,
+          "expectancy_r": 0.1582,
+          "baseline_expectancy_r": 0.1077,
+          "edge_r": 0.0505,
+          "held_rate": 0.6825,
+          "baseline_held_rate": 0.5063
+        },
+        "train_blocks": [
+          {
+            "signals": 10,
+            "expectancy_r": 0.6572,
+            "baseline_expectancy_r": 0.2978,
+            "edge_r": 0.3594,
+            "held_rate": 0.8,
+            "baseline_held_rate": 0.5768
+          },
+          {
+            "signals": 27,
+            "expectancy_r": 0.02,
+            "baseline_expectancy_r": 0.037,
+            "edge_r": -0.017,
+            "held_rate": 0.6296,
+            "baseline_held_rate": 0.4795
+          },
+          {
+            "signals": 26,
+            "expectancy_r": 0.1097,
+            "baseline_expectancy_r": 0.057,
+            "edge_r": 0.0527,
+            "held_rate": 0.6923,
+            "baseline_held_rate": 0.4881
+          }
+        ],
+        "train_score": 0.1317,
+        "eligible": true,
+        "holdout": {
+          "signals": 57,
+          "expectancy_r": 0.2864,
+          "baseline_expectancy_r": 0.1481,
+          "edge_r": 0.1383,
+          "held_rate": 0.5439,
+          "baseline_held_rate": 0.4868
+        }
+      },
+      "settings_tested": 36
+    },
+    "sell": {
+      "adopted": true,
+      "reason": "beat the default in training, did at least as well on the 2021+ holdout, and training scores predicted holdout results across the tested settings (rank correlation +0.52)",
+      "rank_correlation": 0.521,
+      "settings": {
+        "fast": 5,
+        "slow": 13,
+        "sell_turn": 3,
+        "sell_touch": 5
+      },
+      "best_candidate": {
+        "fast": 5,
+        "slow": 13,
+        "sell_turn": 3,
+        "sell_touch": 5
+      },
+      "candidate": {
+        "train": {
+          "signals": 61,
+          "expectancy_r": 0.0084,
+          "baseline_expectancy_r": -0.1593,
+          "edge_r": 0.1676,
+          "held_rate": 0.4262,
+          "baseline_held_rate": 0.3603
+        },
+        "train_blocks": [
+          {
+            "signals": 18,
+            "expectancy_r": -0.1803,
+            "baseline_expectancy_r": -0.3193,
+            "edge_r": 0.1389,
+            "held_rate": 0.3889,
+            "baseline_held_rate": 0.2801
+          },
+          {
+            "signals": 23,
+            "expectancy_r": 0.1074,
+            "baseline_expectancy_r": -0.1508,
+            "edge_r": 0.2582,
+            "held_rate": 0.3478,
+            "baseline_held_rate": 0.3695
+          },
+          {
+            "signals": 20,
+            "expectancy_r": 0.0643,
+            "baseline_expectancy_r": -0.0657,
+            "edge_r": 0.1301,
+            "held_rate": 0.55,
+            "baseline_held_rate": 0.4021
+          }
+        ],
+        "train_score": 0.1757,
+        "eligible": true,
+        "holdout": {
+          "signals": 45,
+          "expectancy_r": 0.102,
+          "baseline_expectancy_r": -0.1892,
+          "edge_r": 0.2912,
+          "held_rate": 0.5333,
+          "baseline_held_rate": 0.3578
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 80,
+          "expectancy_r": -0.2537,
+          "baseline_expectancy_r": -0.1593,
+          "edge_r": -0.0944,
+          "held_rate": 0.3625,
+          "baseline_held_rate": 0.3603
+        },
+        "train_blocks": [
+          {
+            "signals": 24,
+            "expectancy_r": -0.5735,
+            "baseline_expectancy_r": -0.3193,
+            "edge_r": -0.2542,
+            "held_rate": 0.2083,
+            "baseline_held_rate": 0.2801
+          },
+          {
+            "signals": 29,
+            "expectancy_r": -0.1052,
+            "baseline_expectancy_r": -0.1508,
+            "edge_r": 0.0456,
+            "held_rate": 0.3448,
+            "baseline_held_rate": 0.3695
+          },
+          {
+            "signals": 27,
+            "expectancy_r": -0.1289,
+            "baseline_expectancy_r": -0.0657,
+            "edge_r": -0.0632,
+            "held_rate": 0.5185,
+            "baseline_held_rate": 0.4021
+          }
+        ],
+        "train_score": -0.0906,
+        "eligible": false,
+        "holdout": {
+          "signals": 62,
+          "expectancy_r": -0.0115,
+          "baseline_expectancy_r": -0.1892,
+          "edge_r": 0.1777,
+          "held_rate": 0.4839,
+          "baseline_held_rate": 0.3578
+        }
+      },
+      "settings_tested": 9
+    },
+    "snapshot": {
+      "start": "2012-01-01",
+      "end": "2026-10-15"
+    }
+  },
+  "TSLA": {
+    "ticker": "TSLA",
+    "trained_on": "2026-10-21",
+    "data_start": "2012-01-03",
+    "data_through": "2026-10-14",
+    "holdout_start": "2021-01-01",
+    "params": {
+      "fast": 3,
+      "slow": 10,
+      "buy_turn": 3,
+      "buy_touch": 3,
+      "sell_turn": 1,
+      "sell_touch": 3
+    },
+    "tuned": true,
+    "buy": {
+      "adopted": true,
+      "reason": "beat the default in training, did at least as well on the 2021+ holdout, and training scores predicted holdout results across the tested settings (rank correlation +0.62)",
+      "rank_correlation": 0.6212,
+      "settings": {
+        "fast": 3,
+        "slow": 10,
+        "buy_turn": 3,
+        "buy_touch": 3
+      },
+      "best_candidate": {
+        "fast": 3,
+        "slow": 10,
+        "buy_turn": 3,
+        "buy_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 46,
+          "expectancy_r": 0.2551,
+          "baseline_expectancy_r": 0.1896,
+          "edge_r": 0.0655,
+          "held_rate": 0.5652,
+          "baseline_held_rate": 0.5238
+        },
+        "train_blocks": [
+          {
+            "signals": 12,
+            "expectancy_r": 0.6773,
+            "baseline_expectancy_r": 0.2724,
+            "edge_r": 0.4048,
+            "held_rate": 0.5833,
+            "baseline_held_rate": 0.5622
+          },
+          {
+            "signals": 19,
+            "expectancy_r": -0.0044,
+            "baseline_expectancy_r": 0.1318,
+            "edge_r": -0.1362,
+            "held_rate": 0.5263,
+            "baseline_held_rate": 0.5046
+          },
+          {
+            "signals": 15,
+            "expectancy_r": 0.246,
+            "baseline_expectancy_r": 0.1944,
+            "edge_r": 0.0516,
+            "held_rate": 0.6,
+            "baseline_held_rate": 0.5185
+          }
+        ],
+        "train_score": 0.1067,
+        "eligible": true,
+        "holdout": {
+          "signals": 32,
+          "expectancy_r": -0.0741,
+          "baseline_expectancy_r": 0.0028,
+          "edge_r": -0.0769,
+          "held_rate": 0.625,
+          "baseline_held_rate": 0.4612
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 76,
+          "expectancy_r": 0.0962,
+          "baseline_expectancy_r": 0.1896,
+          "edge_r": -0.0934,
+          "held_rate": 0.4868,
+          "baseline_held_rate": 0.5238
+        },
+        "train_blocks": [
+          {
+            "signals": 15,
+            "expectancy_r": 0.3267,
+            "baseline_expectancy_r": 0.2724,
+            "edge_r": 0.0542,
+            "held_rate": 0.5333,
+            "baseline_held_rate": 0.5622
+          },
+          {
+            "signals": 30,
+            "expectancy_r": 0.1305,
+            "baseline_expectancy_r": 0.1318,
+            "edge_r": -0.0014,
+            "held_rate": 0.5,
+            "baseline_held_rate": 0.5046
+          },
+          {
+            "signals": 31,
+            "expectancy_r": -0.0486,
+            "baseline_expectancy_r": 0.1944,
+            "edge_r": -0.243,
+            "held_rate": 0.4516,
+            "baseline_held_rate": 0.5185
+          }
+        ],
+        "train_score": -0.0634,
+        "eligible": false,
+        "holdout": {
+          "signals": 60,
+          "expectancy_r": -0.2353,
+          "baseline_expectancy_r": 0.0028,
+          "edge_r": -0.2381,
+          "held_rate": 0.5167,
+          "baseline_held_rate": 0.4612
+        }
+      },
+      "settings_tested": 36
+    },
+    "sell": {
+      "adopted": true,
+      "reason": "beat the default in training, did at least as well on the 2021+ holdout, and training scores predicted holdout results across the tested settings (rank correlation +0.68)",
+      "rank_correlation": 0.6778,
+      "settings": {
+        "fast": 3,
+        "slow": 10,
+        "sell_turn": 1,
+        "sell_touch": 3
+      },
+      "best_candidate": {
+        "fast": 3,
+        "slow": 10,
+        "sell_turn": 1,
+        "sell_touch": 3
+      },
+      "candidate": {
+        "train": {
+          "signals": 99,
+          "expectancy_r": -0.0541,
+          "baseline_expectancy_r": -0.2044,
+          "edge_r": 0.1503,
+          "held_rate": 0.3131,
+          "baseline_held_rate": 0.3653
+        },
+        "train_blocks": [
+          {
+            "signals": 26,
+            "expectancy_r": -0.2283,
+            "baseline_expectancy_r": -0.2819,
+            "edge_r": 0.0536,
+            "held_rate": 0.3077,
+            "baseline_held_rate": 0.3195
+          },
+          {
+            "signals": 37,
+            "expectancy_r": 0.3434,
+            "baseline_expectancy_r": -0.1438,
+            "edge_r": 0.4873,
+            "held_rate": 0.4054,
+            "baseline_held_rate": 0.3815
+          },
+          {
+            "signals": 36,
+            "expectancy_r": -0.3369,
+            "baseline_expectancy_r": -0.2155,
+            "edge_r": -0.1214,
+            "held_rate": 0.2222,
+            "baseline_held_rate": 0.3783
+          }
+        ],
+        "train_score": 0.1398,
+        "eligible": true,
+        "holdout": {
+          "signals": 65,
+          "expectancy_r": -0.0755,
+          "baseline_expectancy_r": -0.0199,
+          "edge_r": -0.0555,
+          "held_rate": 0.3077,
+          "baseline_held_rate": 0.4237
+        }
+      },
+      "default": {
+        "train": {
+          "signals": 81,
+          "expectancy_r": -0.2344,
+          "baseline_expectancy_r": -0.2044,
+          "edge_r": -0.03,
+          "held_rate": 0.3704,
+          "baseline_held_rate": 0.3653
+        },
+        "train_blocks": [
+          {
+            "signals": 19,
+            "expectancy_r": -0.1103,
+            "baseline_expectancy_r": -0.2819,
+            "edge_r": 0.1717,
+            "held_rate": 0.3158,
+            "baseline_held_rate": 0.3195
+          },
+          {
+            "signals": 30,
+            "expectancy_r": -0.2099,
+            "baseline_expectancy_r": -0.1438,
+            "edge_r": -0.0661,
+            "held_rate": 0.4,
+            "baseline_held_rate": 0.3815
+          },
+          {
+            "signals": 32,
+            "expectancy_r": -0.3312,
+            "baseline_expectancy_r": -0.2155,
+            "edge_r": -0.1157,
+            "held_rate": 0.375,
+            "baseline_held_rate": 0.3783
+          }
+        ],
+        "train_score": -0.0034,
+        "eligible": false,
+        "holdout": {
+          "signals": 52,
+          "expectancy_r": -0.2109,
+          "baseline_expectancy_r": -0.0199,
+          "edge_r": -0.1909,
+          "held_rate": 0.3269,
+          "baseline_held_rate": 0.4237
+        }
+      },
+      "settings_tested": 9
+    },
+    "snapshot": {
+      "start": "2012-01-01",
+      "end": "2026-10-15"
+    }
+  }
+}

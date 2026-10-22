@@ -9,7 +9,8 @@ The zones are not forecasts. They show where price sits relative to levels calib
 The JSON (`schema_version` 4.x, `analysis_type: price_zones`) contains:
 
 - `current_market`: price, daily change, trend label
-- `short_term`: action, buy zone, sell zone, stretch, `momentum` (value, phase, fade, pivot price, interim low/high, latest signal), bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.momentum_bottom`, `history.sell_zone`, `history.momentum_top`, `history.breakdown`), `historical_edge`, reasons, risks
+- `signal_profile`: the momentum-signal settings used for this ticker and, for a tuned ticker, their out-of-sample validation
+- `short_term`: action, buy zone, sell zone, stretch, `momentum` (value, phase, fade, pivot price, interim low/high, latest signal, the settings' EMA speeds and turn lengths), bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.momentum_bottom`, `history.sell_zone`, `history.momentum_top`, `history.breakdown`), `historical_edge`, reasons, risks
 - `trend_outlook.short_term` / `trend_outlook.long_term`: probability of a higher close in 10 / 60 sessions
 - `technical_indicators`, `macro_context`, `data_quality`
 
@@ -21,14 +22,14 @@ The JSON (`schema_version` 4.x, `analysis_type: price_zones`) contains:
 - ATR is the stock's average daily range. Explain it once, in a few words, the first time you use it.
 
 ### Momentum (the main signal)
-- `momentum.value_atr` = (EMA5 − EMA13) / ATR: how fast price has been moving, in ATRs. Below 0 is bearish, above 0 bullish; ±2 or more is strong.
+- `momentum.value_atr` = (EMA fast − EMA slow) / ATR, with the ticker's `fast_span` / `slow_span` (EMA5/13 by default): how fast price has been moving, in ATRs. Below 0 is bearish, above 0 bullish; ±2 or more is strong.
 - `phase`: `BEARISH_BUILDING` = selling still accelerating (a falling knife); `BEARISH_FADING` = still bearish but losing force; `BULLISH_BUILDING`; `BULLISH_FADING`. Use the meaning, never the code.
-- `rising_sessions` / `falling_sessions`: how many sessions in a row momentum has moved that way. A signal needs `turn_sessions_required` (2).
+- `rising_sessions` / `falling_sessions`: how many sessions in a row momentum has moved that way. A signal needs `buy_turn_sessions` (bottom) or `sell_turn_sessions` (top) in a row.
 - `faded_from_extreme`: share of the 10-session extreme that has worn off (0.6 → "60% of the selling pressure has faded").
 - `pivot_price`: the next close above which momentum rises (below which it falls). This is the concrete price that confirms or delays a turn.
 - `interim_low` / `interim_high`: the 6-session extreme. A bottom fails if the low breaks; a top fails if the high is exceeded.
 - `signal`: the latest bottom (`side: buy`) or top (`side: sell`) signal within 3 sessions, with entry, stop, target, `reward_risk_now`, and whether it is still `active` (at least 1:1 left).
-- Action meanings: buy signal = touched the buy zone and bearish momentum faded 2 sessions in a row; bearish momentum easing = one session of fading, not confirmed; in buy zone, momentum still falling = do not buy yet; sell signal = touched the take-profit zone and bullish momentum faded 2 sessions; bullish momentum easing near the top = one session; take-profit zone, momentum still rising = trail, do not guess the high.
+- Action meanings: buy signal = touched the buy zone and bearish momentum faded for the required sessions in a row; bearish momentum easing = fading but no actionable signal yet; in buy zone, momentum still falling = do not buy yet; sell signal = touched the take-profit zone and bullish momentum faded for the required sessions; bullish momentum easing near the top = fading but no actionable signal yet; take-profit zone, momentum still rising = trail, do not guess the high.
 
 ### Bounce checklist
 - Seven checks, including whether bearish momentum is fading; `score` is how many passed. Name the checks that passed and the ones still missing, in plain words.
@@ -66,6 +67,12 @@ How to read a short-term row, in this order:
 - Top signals rarely beat any day in a rising market; when `edge_r` is at or below 0, say that selling at the top signal has not beaten an arbitrary day for this ticker.
 
 Never call a replay rate a probability or a prediction. Say "in past visits".
+
+### Signal settings (`signal_profile`)
+- `source: default` means the ticker uses the default settings. `source: ticker` means it has a tuned profile; `summary` says which sides were tuned.
+- For each side, `adopted` says whether the tuned setting is in use, `reason` says why or why not, and `used.holdout` vs `default.holdout` is the 2021+ out-of-sample comparison. Quote the out-of-sample numbers, not the training ones.
+- When a side is tuned, `short_term.historical_edge` is graded on that out-of-sample record (`basis` starts with "out of sample"), while the momentum-signal rows in `history` cover the full history, including the years the settings were tuned on. Say so when you quote them.
+- Momentum speeds (`momentum.fast_span` / `slow_span`) and turn lengths differ by ticker; use the values in the JSON, never assume EMA5/13 or 2 sessions.
 
 ### Trend outlook
 - `probability_bullish` is the headline. When `probability_source` is `base_rate`, it is only how often the ticker closed higher over that horizon historically. Say that plainly and do not call it a forecast.

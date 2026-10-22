@@ -13,9 +13,10 @@ import pandas as pd
 from .data_loader import MarketDataUnavailableError, download_intraday, load_market_data
 from .entry_zones import (
     BOUNCE_ATR,
+    DEFAULT_SIGNALS,
+    MIN_EPISODES,
     MIN_RISK_ATR,
     MOMENTUM_EXTREME_SESSIONS,
-    MOMENTUM_TURN_SESSIONS,
     SHORT_TERM_BUY_PCTL,
     SHORT_TERM_HORIZON,
     SHORT_TERM_LOOKBACK,
@@ -23,6 +24,7 @@ from .entry_zones import (
     STOP_BUFFER_ATR,
     TARGET_R,
     ZONE_KEYS,
+    SignalParams,
     adjusted_ohlcv,
     bounce_readiness,
     breakdown_state,
@@ -38,6 +40,7 @@ from .entry_zones import (
 )
 from .features import build_features
 from .json_exporter import build_macro_context
+from .ticker_profiles import profile_for
 from .trend_probability import TREND_HORIZONS, trend_outlook
 from .utils import clean_float
 
@@ -46,15 +49,16 @@ CHART_PERIODS = 2520
 # Hourly bars per 4-hour candle, counted from each session's first bar (09:30 and 13:30 for US stocks).
 HOURS_PER_CANDLE = 4
 
+# Definitions are templates: {turn} is the ticker's turn length for that side.
 SHORT_TERM_ACTIONS = {
-    "TOP_SIGNAL": ("Sell signal: bullish momentum faded", "negative", f"Price reached the take-profit zone and momentum has fallen {MOMENTUM_TURN_SESSIONS} sessions in a row, so buying is losing force. Take profits on longs; the top fails if price closes above the interim high."),
-    "TOP_FORMING": ("Bullish momentum easing near the top", "caution", f"Price touched the take-profit zone and momentum dipped today, but one session is not a turn. A second falling session (a close below the momentum pivot) confirms the top."),
+    "TOP_SIGNAL": ("Sell signal: bullish momentum faded", "negative", "Price reached the take-profit zone and momentum has fallen {turn} session(s) in a row, so buying is losing force. Take profits on longs; the top fails if price closes above the interim high."),
+    "TOP_FORMING": ("Bullish momentum easing near the top", "caution", "Price touched the take-profit zone and bullish momentum is easing, but there is no actionable top signal: the {turn}-session turn is not complete, or most of the move after it is already done. A close below the momentum pivot keeps the turn going."),
     "TAKE_PROFIT_ZONE": ("Take-profit zone, momentum still rising", "negative", "Price is stretched into the take-profit zone but bullish momentum is still building. Tops usually come after momentum fades: avoid new entries and trail a stop rather than guessing the high."),
     "SUPPORT_BREAKDOWN": ("Support breakdown", "negative", "Price closed below its most recent swing-low support and has not reclaimed it; breakdowns can keep falling. Do not buy until price closes back above the broken level."),
-    "BOTTOM_SIGNAL": ("Buy signal: bearish momentum faded", "positive", f"Price touched the buy zone and momentum has risen {MOMENTUM_TURN_SESSIONS} sessions in a row, so the selling is losing force. The stop goes under the interim low: if that low breaks, the bottom failed."),
-    "BOTTOM_FORMING": ("Bearish momentum easing", "caution", f"Price is at or near the buy zone and bearish momentum is fading, but it has not risen {MOMENTUM_TURN_SESSIONS} sessions in a row yet. A close above the momentum pivot next session completes the turn."),
-    "ENTRY_ZONE_STILL_FALLING": ("In buy zone, momentum still falling", "caution", "Price is in the buy zone but bearish momentum is still building. Buying now is catching a falling knife; wait for momentum to turn up."),
-    "BELOW_ENTRY_ZONE": ("Below buy zone, momentum still falling", "negative", "Price has fallen through the buy zone and the selling is still accelerating. Wait for bearish momentum to fade before buying."),
+    "BOTTOM_SIGNAL": ("Buy signal: bearish momentum faded", "positive", "Price touched the buy zone and momentum has risen {turn} session(s) in a row, so the selling is losing force. The stop goes under the interim low: if that low breaks, the bottom failed."),
+    "BOTTOM_FORMING": ("Bearish momentum easing", "caution", "Price is at or near the buy zone and bearish momentum is fading, but there is no actionable buy signal: the {turn}-session turn is not complete, or most of the bounce after it is already done. A close above the momentum pivot keeps the turn going."),
+    "ENTRY_ZONE_STILL_FALLING": ("In buy zone, momentum still falling", "caution", "Price is in the buy zone but momentum is still falling, with no bearish turn yet. Buying now is catching a falling knife; wait for momentum to turn up."),
+    "BELOW_ENTRY_ZONE": ("Below buy zone, momentum still falling", "negative", "Price has fallen through the buy zone and momentum is still falling. Wait for momentum to turn up before buying."),
     "APPROACHING_ENTRY": ("Approaching buy zone", "caution", "Price is within one ATR of the buy zone; set an alert at the top of the zone, then wait for momentum to turn."),
     "BOUNCE_UNDERWAY": ("Bounce underway", "neutral", "Price already turned up from the buy zone and is away from the interim low; chasing worsens reward/risk."),
     "WAIT_FOR_PULLBACK": ("Wait for pullback", "neutral", "Price is between zones; wait for a pullback into the buy zone and a momentum turn."),
@@ -101,6 +105,30 @@ def _edge_grade(study: dict) -> dict:
     return {"grade": grade, "label": label, "edge_vs_baseline": edge, "success_rate": study.get("success_rate"), "baseline_success_rate": study.get("baseline_success_rate"), "episodes": study.get("episodes")}
 
 
+def _holdout_evidence(profile: dict | None) -> dict[str, dict]:
+    """For sides whose settings were tuned, the untouched-holdout results in study form.
+
+    The full-history replay includes the period the settings were chosen on, so it flatters
+    them; the holdout is the honest record and is what the edge grade uses for those sides.
+    """
+    evidence = {}
+    for side in ("buy", "sell"):
+        if not profile or not profile[side]["adopted"]:
+            continue
+        holdout = profile[side]["candidate"]["holdout"]
+        evidence[side] = {
+            "edge_r": holdout["edge_r"],
+            "expectancy_r": holdout["expectancy_r"],
+            "baseline_expectancy_r": holdout["baseline_expectancy_r"],
+            "held_rate": holdout["held_rate"],
+            "baseline_held_rate": holdout["baseline_held_rate"],
+            "episodes": holdout["signals"],
+            "sufficient_sample": holdout["signals"] >= MIN_EPISODES,
+            "basis": f"out of sample: {profile['holdout_start'][:4]} to {profile['data_through'][:4]}, after tuning on earlier years",
+        }
+    return evidence
+
+
 def _r_edge_grade(study: dict) -> dict:
     """Grade momentum signals against the same trade taken on any day, in R per trade."""
     edge = study.get("edge_r")
@@ -116,6 +144,7 @@ def _r_edge_grade(study: dict) -> dict:
         "grade": grade, "label": label, "edge_r": edge, "expectancy_r": study.get("expectancy_r"),
         "baseline_expectancy_r": study.get("baseline_expectancy_r"), "held_rate": study.get("held_rate"),
         "baseline_held_rate": study.get("baseline_held_rate"), "episodes": study.get("episodes"),
+        "basis": study.get("basis", "full history"),
     }
 
 
@@ -137,7 +166,11 @@ def _signal_reasons(study: dict, kind: str) -> tuple[list[str], list[str]]:
     return reasons, risks
 
 
-def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataFrame, market_close: pd.Series | None, swings: list[dict]) -> tuple[dict, dict[str, dict]]:
+def _short_term_view(
+    ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataFrame, market_close: pd.Series | None, swings: list[dict],
+    signals: SignalParams = DEFAULT_SIGNALS,
+    holdout: dict[str, dict] | None = None,
+) -> tuple[dict, dict[str, dict]]:
     last = zones.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     atr = float(last["atr"])
@@ -155,11 +188,11 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
         zone_confluence(sell_low, sell_high, atr, anchors, swings, "sell"),
     )
     readiness = bounce_readiness(ohlc, features, zones, market_close)
-    momentum = momentum_state(ohlc, zones)
+    momentum = momentum_state(ohlc, zones, signals)
     buy_study = reversion_study(ohlc, zones, "buy")
     sell_study = reversion_study(ohlc, zones, "sell")
-    bottom_study = momentum_signal_study(ohlc, zones, "buy")
-    top_study = momentum_signal_study(ohlc, zones, "sell")
+    bottom_study = momentum_signal_study(ohlc, zones, "buy", signals)
+    top_study = momentum_signal_study(ohlc, zones, "sell", signals)
     breakdown = breakdown_state(ohlc, zones, swings)
     broken_study = breakdown_study(ohlc, zones, sell_study["baseline_success_rate"])
 
@@ -191,10 +224,13 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
     else:
         action = "WAIT_FOR_PULLBACK"
     label, tone, definition = SHORT_TERM_ACTIONS[action]
+    definition = definition.format(turn=signals.turn("sell" if action in SELL_ACTIONS else "buy"))
     if action == "SUPPORT_BREAKDOWN":
         edge = _edge_grade(broken_study)
     else:
-        edge = _r_edge_grade(top_study if action in SELL_ACTIONS else bottom_study)
+        side = "sell" if action in SELL_ACTIONS else "buy"
+        # Tuned settings are graded on their holdout record, not on the history they were tuned on.
+        edge = _r_edge_grade((holdout or {}).get(side) or (top_study if side == "sell" else bottom_study))
     # A setup this ticker's own history does not reward is never shown as a green light.
     if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
         tone = "caution"
@@ -209,7 +245,8 @@ def _short_term_view(ohlc: pd.DataFrame, features: pd.DataFrame, zones: pd.DataF
         stop, stop_basis = reference - BOUNCE_ATR * atr, f"{BOUNCE_ATR:g} ATR below the reclaim level"
         target_1, target_1_basis = None, None
     elif near_buy and phase.startswith("BEARISH") and pivot is not None:
-        turns = "a second rising session completes the signal" if phase == "BEARISH_FADING" else f"momentum needs {MOMENTUM_TURN_SESSIONS} rising sessions"
+        remaining = max(signals.buy_turn - momentum["rising_sessions"], 1)
+        turns = f"{remaining} more rising session(s) complete the {signals.buy_turn}-session turn"
         reference = max(pivot, close) if phase == "BEARISH_FADING" else pivot
         reference_basis = f"estimated close that turns momentum up next session; {turns}"
         stop = min(momentum["interim_low"] - STOP_BUFFER_ATR * atr, reference - MIN_RISK_ATR * atr)
@@ -462,6 +499,46 @@ def generate_zone_analysis(
     )
 
 
+def _signal_profile(ticker: str, signals: SignalParams, profile: dict | None) -> dict:
+    """Which signal settings this report used, and the validation behind a per-ticker profile."""
+    if profile is None:
+        return {
+            "source": "default",
+            "params": signals.to_dict(),
+            "summary": f"No tuned profile for {ticker.upper()}; using the default settings chosen across 29 tickers.",
+        }
+    sides = {}
+    for side in ("buy", "sell"):
+        report = profile[side]
+        used = report["candidate"] if report["adopted"] else report["default"]
+        sides[side] = {
+            "adopted": report["adopted"],
+            "reason": report["reason"],
+            "rank_correlation": report["rank_correlation"],
+            "settings": report["settings"],
+            "best_candidate": report["best_candidate"],
+            "used": {"train": used["train"], "holdout": used["holdout"]},
+            "default": {"train": report["default"]["train"], "holdout": report["default"]["holdout"]},
+            "candidate": {"train": report["candidate"]["train"], "holdout": report["candidate"]["holdout"]},
+        }
+    tuned = [label for side, label in (("buy", "bottom"), ("sell", "top")) if sides[side]["adopted"]]
+    return {
+        "source": "ticker",
+        "params": signals.to_dict(),
+        "tuned": bool(tuned),
+        "trained_on": profile["trained_on"],
+        "data_start": profile["data_start"],
+        "data_through": profile["data_through"],
+        "holdout_start": profile["holdout_start"],
+        "summary": (
+            f"{ticker.upper()} uses its own tuned {' and '.join(tuned)} signal settings."
+            if tuned
+            else f"{ticker.upper()} was tuned, but no setting beat the defaults reliably, so it keeps the default settings."
+        ),
+        **sides,
+    }
+
+
 def build_zone_report(
     features: pd.DataFrame,
     ticker: str,
@@ -469,17 +546,22 @@ def build_zone_report(
     benchmarks: dict | None = None,
     data_warnings: list[str] | None = None,
     intraday: pd.DataFrame | None = None,
+    signals: SignalParams | None = None,
 ) -> dict:
+    """Build the report. Without explicit `signals`, a ticker with a stored profile uses its own settings."""
     benchmarks = benchmarks or {"equity_primary": "QQQ", "equity_secondary": "SPY", "treasury_yield": "^TNX", "oil": "CL=F"}
+    profile = None
+    if signals is None:
+        signals, profile = profile_for(ticker)
     ohlc = adjusted_ohlcv(features)
-    zones = compute_zone_frame(ohlc)
+    zones = compute_zone_frame(ohlc, signals)
     last = zones.iloc[-1]
     if not np.isfinite(last[["next_st_buy_low", "next_st_buy_high", "atr", "ema20"]].astype(float)).all():
         raise MarketDataUnavailableError(
             f"{ticker.upper()} needs at least about one year of daily history to calibrate its zones."
         )
     swings = swing_levels(ohlc)
-    short_term, studies = _short_term_view(ohlc, features, zones, market_close, swings)
+    short_term, studies = _short_term_view(ohlc, features, zones, market_close, swings, signals, _holdout_evidence(profile))
     latest = features.iloc[-1]
     close = float(ohlc["close"].iloc[-1])
     previous_close = float(ohlc["close"].iloc[-2])
@@ -503,6 +585,7 @@ def build_zone_report(
             ),
         },
         "short_term": short_term,
+        "signal_profile": _signal_profile(ticker, signals, profile),
         "trend_outlook": {key: trend_outlook(ohlc, zones, features, horizon) for key, horizon in TREND_HORIZONS.items()},
         "technical_indicators": {
             "ema20": clean_float(last["ema20"], 2),
@@ -525,7 +608,7 @@ def build_zone_report(
         "methodology": {
             "summary": (
                 "Zones are calibrated from this ticker's own history, not predicted. Short-term zones measure how far "
-                "price is stretched from its 20-day EMA in ATR units; momentum, (EMA5 - EMA13) / ATR, measures how fast it got "
+                f"price is stretched from its 20-day EMA in ATR units; momentum, (EMA{signals.fast} - EMA{signals.slow}) / ATR, measures how fast it got "
                 "there, and buy or sell signals wait for that momentum to fade. "
                 "Each zone is replayed against every earlier visit to report how price behaved afterwards."
             ),

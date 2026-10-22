@@ -103,7 +103,9 @@ function MomentumGauge({ momentum }) {
   return (
     <div className="gauge momentum-gauge">
       <div className="gauge-head">
-        <span>Momentum (EMA5 − EMA13, in ATRs)</span>
+        <span>
+          Momentum (EMA{momentum.fast_span} − EMA{momentum.slow_span}, in ATRs)
+        </span>
         <strong>
           {isNumber(value) ? `${value > 0 ? "+" : ""}${fixed(value, 2)} ATR` : "-"} · {PHASE_LABELS[momentum.phase]}
         </strong>
@@ -151,7 +153,7 @@ function SignalCallout({ signal }) {
   );
 }
 
-export function ShortTermHero({ shortTerm, market }) {
+export function ShortTermHero({ shortTerm, market, profile }) {
   const history = shortTerm.history;
   const momentum = shortTerm.momentum;
   const edge = shortTerm.historical_edge;
@@ -166,7 +168,10 @@ export function ShortTermHero({ shortTerm, market }) {
           Short-term · {shortTerm.horizon_sessions}-session{" "}
           {breakdown ? "support breakdown" : sellSide ? "interim top" : "interim bottom"}
         </p>
-        <span className={`chip ${edgeTone}`}>{edgeLabel}</span>
+        <span className={`chip ${edgeTone}`} title={edge.basis ? `Graded on ${edge.basis}` : undefined}>
+          {edgeLabel}
+          {edge.basis?.startsWith("out of sample") ? " (out of sample)" : ""}
+        </span>
       </div>
       <h2>{shortTerm.action_label}</h2>
       <p className="summary">{shortTerm.action_definition}</p>
@@ -205,7 +210,11 @@ export function ShortTermHero({ shortTerm, market }) {
       {breakdown ? (
         <BreakdownStats breakdown={breakdown} study={history.breakdown} />
       ) : (
-        <SignalStats side={sellSide ? "sell" : "buy"} study={sellSide ? history.momentum_top : history.momentum_bottom} />
+        <SignalStats
+          side={sellSide ? "sell" : "buy"}
+          study={sellSide ? history.momentum_top : history.momentum_bottom}
+          tuned={Boolean(profile?.[sellSide ? "sell" : "buy"]?.adopted)}
+        />
       )}
       <p className="footnote">
         {breakdown
@@ -216,13 +225,13 @@ export function ShortTermHero({ shortTerm, market }) {
   );
 }
 
-function SignalStats({ side, study }) {
+function SignalStats({ side, study, tuned }) {
   const kind = side === "buy" ? "bottom" : "top";
   const extreme = side === "buy" ? "low" : "high";
   return (
     <div className="hero-stats">
       <Stat
-        detail={`vs ${signedR(study.baseline_expectancy_r)} on any day · ${study.episodes} signals`}
+        detail={`vs ${signedR(study.baseline_expectancy_r)} on any day · ${study.episodes} signals${tuned ? " · includes the years the settings were tuned on" : ""}`}
         label={`Average result of past ${kind} signals`}
         value={signedR(study.expectancy_r)}
       />
@@ -471,7 +480,7 @@ export function EvidenceTables({ shortTerm }) {
 // Column definitions, rendered as header tooltips and as the list under the table.
 function signalColumns(study) {
   return [
-    ["Signals", `Completed past signals. A signal needs a zone touch within 5 sessions and momentum turning against the move for 2 sessions in a row.`],
+    ["Signals", "Completed past signals. A signal needs a recent zone touch and momentum turning against the move for the ticker's turn length (see Signal settings)."],
     ["Average R", "Average result per trade in R, where 1R is the amount risked (entry to stop). +1R gained that amount; −1R lost it."],
     ["Median R", "The middle result. When it is far below the average, a few big winners carry the average."],
     ["Any day", "Average R of the same trade (stop beyond the 6-session extreme, same target) taken at every session's close."],
@@ -533,6 +542,66 @@ function MomentumSignalTable({ bottom, top }) {
         ))}
       </dl>
     </>
+  );
+}
+
+const SIDE_NAMES = { buy: "Bottom (buy)", sell: "Top (sell)" };
+
+function settingText(settings, side) {
+  if (!settings) return "-";
+  return `EMA${settings.fast}/${settings.slow} · ${settings[`${side}_turn`]}-session turn · touch within ${settings[`${side}_touch`]}`;
+}
+
+// Which signal settings this ticker uses, and the out-of-sample check behind a tuned profile.
+export function SignalProfilePanel({ profile }) {
+  if (!profile) return null;
+  const ticker = profile.source === "ticker";
+  return (
+    <article className="panel signal-profile">
+      <h2>Signal settings</h2>
+      <p className="panel-note">{profile.summary}</p>
+      {ticker ? (
+        <>
+          {["buy", "sell"].map((side) => {
+            const report = profile[side];
+            return (
+              <div className={`profile-side ${report.adopted ? "tuned" : "default"}`} key={side}>
+                <div className="profile-side-head">
+                  <strong>{SIDE_NAMES[side]}</strong>
+                  <span className={`chip ${report.adopted ? "positive" : "neutral"}`}>{report.adopted ? "Tuned" : "Default"}</span>
+                </div>
+                <Row label="Settings used" value={settingText(report.settings, side)} />
+                <Row
+                  detail={`${profile.holdout_start.slice(0, 4)}+, never used for tuning · ${report.used.holdout.signals} signals`}
+                  label="Out-of-sample edge"
+                  value={`${signedR(report.used.holdout.edge_r)} vs default ${signedR(report.default.holdout.edge_r)}`}
+                />
+                <Row
+                  detail={`up to ${profile.holdout_start.slice(0, 4)} · ${report.used.train.signals} signals`}
+                  label="Training edge"
+                  value={`${signedR(report.used.train.edge_r)} vs default ${signedR(report.default.train.edge_r)}`}
+                />
+                {!report.adopted && (
+                  <small className="profile-reason">
+                    Best tested: {settingText(report.best_candidate, side)}. Not used: {report.reason}.
+                  </small>
+                )}
+              </div>
+            );
+          })}
+          <small className="profile-reason">
+            Trained {profile.trained_on} on data {profile.data_start} to {profile.data_through}. A setting is used only if it beat the
+            default in training, did at least as well after {profile.holdout_start.slice(0, 4)}, and training rankings predicted the later
+            results.
+          </small>
+        </>
+      ) : (
+        <>
+          <Row label="Bottom (buy)" value={settingText(profile.params, "buy")} />
+          <Row label="Top (sell)" value={settingText(profile.params, "sell")} />
+        </>
+      )}
+    </article>
   );
 }
 

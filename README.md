@@ -75,6 +75,37 @@ How the rule was chosen: momentum speeds (3/10, 5/13, 5/20, 8/21), one to three 
 
 The bottom signal beat the first-touch entry in 11 of 14 years and beat any day in 11 of 14 years (21 of 29 tickers), but in 2021–2026 the aggregate edge over any day was about zero. Divergence, the "slowing but still falling" entry, and requiring a close above the prior high did not hold up out of sample. Top signals beat selling at the first touch but not selling on any day (9 of 14 years, 14 of 29 tickers): calling tops in rising markets rarely pays. Read the ticker's own replay before trusting either signal.
 
+### Per-ticker signal profiles
+
+QQQ, VOO, SMH, MU and TSLA have their own tuned signal settings, stored in [models/ticker_profiles.json](models/ticker_profiles.json). When one of them is analyzed, the report uses its settings; any other ticker uses the defaults (EMA5/13, 2-session turn, zone touch within 5 sessions). The **Signal settings** panel shows which settings were used and why.
+
+The tuner ([src/ticker_profiles.py](src/ticker_profiles.py)) tests 36 bottom-signal settings (EMA speeds 3/10, 5/13, 5/20, 8/21; turn length 1–3 sessions; touch window 3, 5 or 8 sessions), then 9 top-signal settings on the chosen speeds. With about 100 signals per ticker, picking the best of 36 on the same data mostly finds noise, so a setting replaces the default only if it passes all four checks:
+
+1. It has the best training score (average edge over three 3-year blocks of 2012–2020, positive in at least two), with at least 20 training signals.
+2. It beats the default's training score by at least 0.05R.
+3. It does at least as well as the default on 2021–2026, which tuning never sees (at least 10 signals).
+4. Across all tested settings, training scores rank the 2021–2026 results in the same order (Spearman ≥ 0.3). This rejects a ticker where the winner was lucky.
+
+For a tuned side, the card's edge grade uses the 2021–2026 out-of-sample result, because the full-history replay includes the years the settings were chosen on. Results on the 2026-10-15 snapshot:
+
+| Ticker | Bottom (buy) | Top (sell) | Out of sample, tuned vs default |
+|---|---|---|---|
+| QQQ | Tuned: EMA8/21, touch within 3 | Default | buy +0.23R vs −0.02R |
+| SMH | Tuned: EMA5/20, touch within 3 | Default | buy +0.26R vs +0.16R |
+| TSLA | Tuned: EMA3/10, 3-session turn, touch within 3 | Tuned: 1-session turn, touch within 3 | buy −0.08R vs −0.24R; sell −0.06R vs −0.19R |
+| MU | Default (tuned winner was luck: rank correlation −0.07) | Tuned: 3-session turn | sell +0.29R vs +0.18R |
+| VOO | Default (rank correlation −0.27) | Default | — |
+
+TSLA's tuned signals lose less than the defaults but still do not beat trading on any day, and the card says so.
+
+Retrain after new data (this overwrites the profiles and records the snapshot used):
+
+```bash
+python -m src.ticker_profiles QQQ VOO SMH MU TSLA --end 2026-10-15
+```
+
+`tests/test_ticker_profiles.py` is the regression test: it re-trains each stored profile from its recorded price snapshot and fails if any setting or validation number changes, so a code change that shifts a ticker's behaviour cannot slip through. It also checks every adopted setting obeys the four rules. The snapshots live in the gitignored `data/cache/`, so the reproduction test skips on machines that have not downloaded them.
+
 ### Reading the zone-touch statistics
 
 A zone-touch setup "works" when price moves 1.5 ATR in the expected direction before moving 1.5 ATR against it within 10 sessions, so about 50% is break-even before costs. Every rate is shown next to an **any-day baseline**: the same bracket entered at every session's close.
@@ -134,7 +165,7 @@ Example `/analyze` input:
 }
 ```
 
-The response (`schema_version` 4.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `trend_outlook`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py), the trend outlook in [src/trend_probability.py](src/trend_probability.py), and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
+The response (`schema_version` 4.0, `analysis_type: price_zones`) contains `current_market`, `short_term`, `signal_profile` (the signal settings used and their validation), `trend_outlook`, `technical_indicators`, `macro_context`, `chart_data` (`points` with per-session zone bands and `zone_touches`), and `methodology`. The zone engine lives in [src/entry_zones.py](src/entry_zones.py), the trend outlook in [src/trend_probability.py](src/trend_probability.py), and the report is assembled in [src/zone_analysis.py](src/zone_analysis.py).
 
 ## Render Deployment
 

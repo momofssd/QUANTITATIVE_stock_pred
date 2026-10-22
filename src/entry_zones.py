@@ -7,7 +7,8 @@ line, and each zone ships with a replay of what price did after earlier visits.
 Short-term deviation: (close - prior EMA20) / prior ATR14, so a zone is a
 stretch measured in the ticker's own volatility units.
 
-Momentum: (EMA5 - EMA13) / ATR14, the speed of the recent move in ATR units.
+Momentum: (EMA fast - EMA slow) / ATR14, the speed of the recent move in ATR units
+(EMA5/13 by default; see SignalParams and per-ticker profiles).
 Negative is bearish, positive bullish. Whether it is building or fading is read
 from the EMA spread itself, so a quiet session (shrinking ATR) cannot make a
 stalled decline look like it is accelerating. A zone says where price is stretched; the
@@ -19,6 +20,8 @@ session it is grading.
 """
 
 from __future__ import annotations
+
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
@@ -36,12 +39,9 @@ BOUNCE_ATR = 1.5
 RECENT_TOUCH_SESSIONS = 3
 SWING_WINDOW = 5
 BREAKDOWN_ACTIVE_SESSIONS = 5
-MOMENTUM_FAST, MOMENTUM_SLOW = 5, 13
-# A bottom (top) signal: within SIGNAL_TOUCH_SESSIONS of a buy (take-profit) zone touch, momentum is still
-# bearish (bullish) but has moved against the trend for MOMENTUM_TURN_SESSIONS sessions in a row.
-MOMENTUM_TURN_SESSIONS = 2
-SIGNAL_TOUCH_SESSIONS = 5
 SIGNAL_ACTIVE_SESSIONS = 3
+# Replayed signals are at least this many sessions apart, whatever the settings.
+SIGNAL_GAP_SESSIONS = 5
 MOMENTUM_EXTREME_SESSIONS = 10
 # The signal's stop sits STOP_BUFFER_ATR beyond the interim low (high) of the last INTERIM_SESSIONS,
 # at least MIN_RISK_ATR from the entry; the target is TARGET_R times that risk.
@@ -51,6 +51,35 @@ MIN_RISK_ATR = 0.5
 TARGET_R = 2.0
 
 ZONE_KEYS = ("st_buy", "st_sell")
+
+
+@dataclass(frozen=True)
+class SignalParams:
+    """Momentum-signal settings. The defaults were chosen across 29 tickers; per-ticker profiles override them.
+
+    A bottom (top) signal: within `*_touch` sessions of a buy (take-profit) zone touch, momentum
+    (EMA `fast` - EMA `slow`) is still bearish (bullish) but has moved against the trend for exactly
+    `*_turn` sessions in a row.
+    """
+
+    fast: int = 5
+    slow: int = 13
+    buy_turn: int = 2
+    buy_touch: int = 5
+    sell_turn: int = 2
+    sell_touch: int = 5
+
+    def turn(self, side: str) -> int:
+        return self.buy_turn if side == "buy" else self.sell_turn
+
+    def touch(self, side: str) -> int:
+        return self.buy_touch if side == "buy" else self.sell_touch
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+DEFAULT_SIGNALS = SignalParams()
 
 
 def adjusted_ohlcv(features: pd.DataFrame) -> pd.DataFrame:
@@ -72,7 +101,7 @@ def adjusted_ohlcv(features: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def compute_zone_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
+def compute_zone_frame(ohlc: pd.DataFrame, signals: SignalParams = DEFAULT_SIGNALS) -> pd.DataFrame:
     """Anchors, deviations, and zone levels for every session.
 
     `<zone>_low/high` columns are the band that applied *during* that session.
@@ -88,8 +117,8 @@ def compute_zone_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
     frame["ma50"] = close.rolling(50, min_periods=50).mean()
     frame["ma200"] = close.rolling(200, min_periods=200).mean()
     frame["st_dev"] = (close - frame["ema20"].shift()) / frame["atr"].shift()
-    frame["ema_fast"] = close.ewm(span=MOMENTUM_FAST, adjust=False, min_periods=MOMENTUM_FAST).mean()
-    frame["ema_slow"] = close.ewm(span=MOMENTUM_SLOW, adjust=False, min_periods=MOMENTUM_SLOW).mean()
+    frame["ema_fast"] = close.ewm(span=signals.fast, adjust=False, min_periods=signals.fast).mean()
+    frame["ema_slow"] = close.ewm(span=signals.slow, adjust=False, min_periods=signals.slow).mean()
     spread = frame["ema_fast"] - frame["ema_slow"]
     frame["momentum"] = spread / frame["atr"]
     # Daily change of the spread, expressed in today's ATRs for display; its sign is price-only.
@@ -285,20 +314,20 @@ def _run_length(flags: pd.Series) -> pd.Series:
     return flags.astype(int).groupby((~flags).cumsum()).cumsum()
 
 
-def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
+def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParams = DEFAULT_SIGNALS) -> pd.DataFrame:
     """Per-session momentum-exhaustion state, all known at that session's close.
 
-    buy_signal: the session on which, within SIGNAL_TOUCH_SESSIONS of a buy-zone touch, momentum is
-    still negative but has risen for exactly MOMENTUM_TURN_SESSIONS sessions: the selling is losing force.
+    buy_signal: the session on which, within `signals.buy_touch` sessions of a buy-zone touch, momentum
+    is still negative but has risen for exactly `signals.buy_turn` sessions: the selling is losing force.
     sell_signal mirrors it at the take-profit zone. buy/sell stop and target are the levels an entry at
     that session's close would use: beyond the interim low (high) of the last INTERIM_SESSIONS, and
-    TARGET_R times that risk.
+    TARGET_R times that risk. They do not depend on `signals`, so the any-day baseline does not either.
     """
     momentum = zones["momentum"]
     change = zones["momentum_change"]
     rising, falling = _run_length(change > 0), _run_length(change < 0)
-    touched_buy = (ohlc["low"] <= zones["st_buy_high"]).astype(float).rolling(SIGNAL_TOUCH_SESSIONS, min_periods=1).max()
-    touched_sell = (ohlc["high"] >= zones["st_sell_low"]).astype(float).rolling(SIGNAL_TOUCH_SESSIONS, min_periods=1).max()
+    touched_buy = (ohlc["low"] <= zones["st_buy_high"]).astype(float).rolling(signals.buy_touch, min_periods=1).max()
+    touched_sell = (ohlc["high"] >= zones["st_sell_low"]).astype(float).rolling(signals.sell_touch, min_periods=1).max()
     close, atr = ohlc["close"], zones["atr"]
     interim_low = ohlc["low"].rolling(INTERIM_SESSIONS, min_periods=1).min()
     interim_high = ohlc["high"].rolling(INTERIM_SESSIONS, min_periods=1).max()
@@ -312,8 +341,8 @@ def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
             "falling_sessions": falling,
             "touched_buy": touched_buy > 0,
             "touched_sell": touched_sell > 0,
-            "buy_signal": (touched_buy > 0) & (momentum < 0) & (rising == MOMENTUM_TURN_SESSIONS),
-            "sell_signal": (touched_sell > 0) & (momentum > 0) & (falling == MOMENTUM_TURN_SESSIONS),
+            "buy_signal": (touched_buy > 0) & (momentum < 0) & (rising == signals.buy_turn),
+            "sell_signal": (touched_sell > 0) & (momentum > 0) & (falling == signals.sell_turn),
             "interim_low": interim_low,
             "interim_high": interim_high,
             "buy_stop": buy_stop,
@@ -325,21 +354,21 @@ def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def momentum_pivot(zones: pd.DataFrame) -> float | None:
+def momentum_pivot(zones: pd.DataFrame, signals: SignalParams = DEFAULT_SIGNALS) -> float | None:
     """Next-session close at which the EMA spread, and so the momentum direction, is unchanged.
 
     Both EMAs move linearly with the close, so a close above this price makes momentum
     rise and a close below makes it fall.
     """
     last = zones.iloc[-1]
-    fast, slow = 2 / (MOMENTUM_FAST + 1), 2 / (MOMENTUM_SLOW + 1)
+    fast, slow = 2 / (signals.fast + 1), 2 / (signals.slow + 1)
     value = (fast * last["ema_fast"] - slow * last["ema_slow"]) / (fast - slow)
     return float(value) if np.isfinite(value) else None
 
 
-def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame) -> dict:
+def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParams = DEFAULT_SIGNALS) -> dict:
     """Where momentum stands after the latest close, and the most recent bottom or top signal."""
-    frame = momentum_frame(ohlc, zones)
+    frame = momentum_frame(ohlc, zones, signals)
     last = frame.iloc[-1]
     value, change = float(last["momentum"]), float(last["change"])
     if value < 0:
@@ -388,19 +417,24 @@ def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame) -> dict:
         "falling_sessions": int(last["falling_sessions"]),
         "recent_extreme_atr": clean_float(extreme, 2),
         "faded_from_extreme": clean_float(faded),
-        "pivot_price": clean_float(momentum_pivot(zones), 2),
+        "pivot_price": clean_float(momentum_pivot(zones, signals), 2),
         "interim_low": clean_float(last["interim_low"], 2),
         "interim_high": clean_float(last["interim_high"], 2),
         "touched_buy_zone": bool(last["touched_buy"]),
         "touched_sell_zone": bool(last["touched_sell"]),
-        "touch_window_sessions": SIGNAL_TOUCH_SESSIONS,
-        "turn_sessions_required": MOMENTUM_TURN_SESSIONS,
+        "fast_span": signals.fast,
+        "slow_span": signals.slow,
+        "buy_touch_sessions": signals.buy_touch,
+        "buy_turn_sessions": signals.buy_turn,
+        "sell_touch_sessions": signals.sell_touch,
+        "sell_turn_sessions": signals.sell_turn,
         "signal": signal,
         "definition": (
-            f"Momentum = (EMA{MOMENTUM_FAST} - EMA{MOMENTUM_SLOW}) / ATR14: how fast price has been moving, in ATRs. "
+            f"Momentum = (EMA{signals.fast} - EMA{signals.slow}) / ATR14: how fast price has been moving, in ATRs. "
             "Below 0 is bearish, above 0 bullish. Fading = moving back toward 0. "
-            f"A bottom signal needs a buy-zone touch within {SIGNAL_TOUCH_SESSIONS} sessions and bearish momentum that "
-            f"has faded for {MOMENTUM_TURN_SESSIONS} sessions in a row; a top signal mirrors it at the take-profit zone."
+            f"A bottom signal needs a buy-zone touch within {signals.buy_touch} sessions and bearish momentum that has "
+            f"faded for {signals.buy_turn} session(s) in a row; a top signal needs a take-profit-zone touch within "
+            f"{signals.sell_touch} sessions and bullish momentum that has faded for {signals.sell_turn} session(s)."
         ),
     }
 
@@ -426,32 +460,26 @@ def _trade_r(
     return outcome, None, None
 
 
-def momentum_signal_study(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon: int = SHORT_TERM_HORIZON) -> dict:
-    """Replay every earlier bottom (buy) or top (sell) signal as the trade the dashboard proposes.
+def _held(lows: np.ndarray, highs: np.ndarray, interim: np.ndarray, i: int, horizon: int, side: str) -> bool:
+    """The interim low (high) at session i was not broken within the next `horizon` sessions."""
+    window = slice(i + 1, i + 1 + horizon)
+    return bool(lows[window].min() > interim[i]) if side == "buy" else bool(highs[window].max() < interim[i])
 
-    Entry is the signal session's close, the stop sits beyond the interim low (high), and the
-    target is TARGET_R times the risk; each trade ends at the target, the stop, or after `horizon`
-    sessions. The baseline makes the same trade from every session's close, so the edge shows
-    whether waiting for momentum to fade beat entering on an arbitrary day. "Held" = the interim
-    low (high) was not broken within `horizon` sessions, i.e. the signal caught a real turn.
-    """
-    frame = momentum_frame(ohlc, zones)
+
+def signal_trades(
+    ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, signals: SignalParams = DEFAULT_SIGNALS, horizon: int = SHORT_TERM_HORIZON,
+) -> list[dict]:
+    """Every past bottom (buy) or top (sell) signal, at least SIGNAL_GAP_SESSIONS apart, graded as the proposed trade."""
+    frame = momentum_frame(ohlc, zones, signals)
     opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
     stops, targets = frame[f"{side}_stop"].to_numpy(), frame[f"{side}_target"].to_numpy()
     interim = frame["interim_low" if side == "buy" else "interim_high"].to_numpy()
     atr = zones["atr"].to_numpy()
     trend_up = (ohlc["close"] > zones["ma200"]).to_numpy()
-    band = zones["st_buy_high" if side == "buy" else "st_sell_low"].to_numpy()
-    n = len(closes)
-
-    def held(i: int) -> bool:
-        window = slice(i + 1, i + 1 + horizon)
-        return bool(lows[window].min() > interim[i]) if side == "buy" else bool(highs[window].max() < interim[i])
-
     episodes: list[dict] = []
-    last = -SIGNAL_TOUCH_SESSIONS - 1
+    last = -SIGNAL_GAP_SESSIONS - 1
     for i in np.flatnonzero(frame[f"{side}_signal"].to_numpy()):
-        if i - last <= SIGNAL_TOUCH_SESSIONS:
+        if i - last <= SIGNAL_GAP_SESSIONS:
             continue
         last = i
         outcome, r, target_day = _trade_r(opens, highs, lows, closes, int(i), horizon, stops[i], targets[i], side)
@@ -475,21 +503,49 @@ def momentum_signal_study(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, ho
                 "complete": complete,
                 "trend_up": bool(trend_up[i]),
                 "r_multiple": r,
-                "held": held(int(i)) if complete else None,
+                "held": _held(lows, highs, interim, int(i), horizon, side) if complete else None,
                 "further_move_atr": float(further / atr[i]) if further is not None else None,
                 "days_to_target": target_day,
             }
         )
-    baseline_r, baseline_held = [], []
-    for i in np.flatnonzero(np.isfinite(band) & np.isfinite(stops) & np.isfinite(atr)):
-        if i + horizon > n - 1:
-            break
-        baseline_r.append(_trade_r(opens, highs, lows, closes, int(i), horizon, stops[i], targets[i], side)[1])
-        baseline_held.append(held(int(i)))
+    return episodes
+
+
+def baseline_trades(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon: int = SHORT_TERM_HORIZON) -> pd.DataFrame:
+    """The same trade taken at every session's close (once the zones exist), indexed by entry date."""
+    frame = momentum_frame(ohlc, zones)
+    opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
+    stops, targets = frame[f"{side}_stop"].to_numpy(), frame[f"{side}_target"].to_numpy()
+    interim = frame["interim_low" if side == "buy" else "interim_high"].to_numpy()
+    band = zones["st_buy_high" if side == "buy" else "st_sell_low"].to_numpy()
+    valid = np.flatnonzero(np.isfinite(band) & np.isfinite(stops) & np.isfinite(zones["atr"].to_numpy()))
+    days = [int(i) for i in valid if i + horizon <= len(closes) - 1]
+    return pd.DataFrame(
+        {
+            "r_multiple": [_trade_r(opens, highs, lows, closes, i, horizon, stops[i], targets[i], side)[1] for i in days],
+            "held": [_held(lows, highs, interim, i, horizon, side) for i in days],
+        },
+        index=ohlc.index[days],
+    )
+
+
+def momentum_signal_study(
+    ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, signals: SignalParams = DEFAULT_SIGNALS, horizon: int = SHORT_TERM_HORIZON,
+) -> dict:
+    """Replay every earlier bottom (buy) or top (sell) signal as the trade the dashboard proposes.
+
+    Entry is the signal session's close, the stop sits beyond the interim low (high), and the
+    target is TARGET_R times the risk; each trade ends at the target, the stop, or after `horizon`
+    sessions. The baseline makes the same trade from every session's close, so the edge shows
+    whether waiting for momentum to fade beat entering on an arbitrary day. "Held" = the interim
+    low (high) was not broken within `horizon` sessions, i.e. the signal caught a real turn.
+    """
+    episodes = signal_trades(ohlc, zones, side, signals, horizon)
+    baseline = baseline_trades(ohlc, zones, side, horizon)
     graded = [episode for episode in episodes if episode["complete"]]
     results = [episode["r_multiple"] for episode in graded]
     expectancy = float(np.mean(results)) if results else None
-    baseline_expectancy = float(np.mean(baseline_r)) if baseline_r else None
+    baseline_expectancy = float(baseline["r_multiple"].mean()) if len(baseline) else None
     current_trend_up = bool(ohlc["close"].iloc[-1] > zones["ma200"].iloc[-1])
     extreme = "low" if side == "buy" else "high"
     return {
@@ -508,19 +564,19 @@ def momentum_signal_study(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, ho
             clean_float(expectancy - baseline_expectancy, 2) if expectancy is not None and baseline_expectancy is not None else None
         ),
         "held_rate": clean_float(_rate([episode["held"] for episode in graded])),
-        "baseline_held_rate": clean_float(_rate(baseline_held)),
+        "baseline_held_rate": clean_float(_rate(list(baseline["held"]))),
         "median_further_move_atr": clean_float(_median([episode["further_move_atr"] for episode in graded]), 2),
         "median_days_to_target": clean_float(
             _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
         ),
         "by_trend": _summarize_context(episodes, current_trend_up),
         "definition": (
-            f"Signal = within {SIGNAL_TOUCH_SESSIONS} sessions of a {'buy' if side == 'buy' else 'take-profit'}-zone touch, "
-            f"momentum {'rose' if side == 'buy' else 'fell'} {MOMENTUM_TURN_SESSIONS} sessions in a row while still "
-            f"{'bearish' if side == 'buy' else 'bullish'}. Entry at that close; stop {STOP_BUFFER_ATR:g} ATR beyond the "
-            f"{INTERIM_SESSIONS}-session {extreme}; target {TARGET_R:g}x the risk; otherwise exit after {horizon} sessions. "
-            f"Results are in R (multiples of the risk). Held = the interim {extreme} was not broken within {horizon} sessions. "
-            "Baseline = the same trade from every session's close."
+            f"Signal = within {signals.touch(side)} sessions of a {'buy' if side == 'buy' else 'take-profit'}-zone touch, "
+            f"momentum (EMA{signals.fast} - EMA{signals.slow}) {'rose' if side == 'buy' else 'fell'} {signals.turn(side)} "
+            f"session(s) in a row while still {'bearish' if side == 'buy' else 'bullish'}. Entry at that close; stop "
+            f"{STOP_BUFFER_ATR:g} ATR beyond the {INTERIM_SESSIONS}-session {extreme}; target {TARGET_R:g}x the risk; otherwise "
+            f"exit after {horizon} sessions. Results are in R (multiples of the risk). Held = the interim {extreme} was not "
+            f"broken within {horizon} sessions. Baseline = the same trade from every session's close."
         ),
         "recent_episodes": episodes,
     }

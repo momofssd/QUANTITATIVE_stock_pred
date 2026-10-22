@@ -665,7 +665,7 @@ export default function MarketChart({ chart, shortTerm }) {
           {lowerStudy === "STRETCH"
             ? "Stretch from EMA20 (ATRs) · shaded = zone thresholds"
             : lowerStudy === "MOMENTUM"
-              ? "Momentum: EMA5 − EMA13 (ATRs) · solid = building, light = fading"
+              ? `Momentum: EMA${shortTerm?.momentum?.fast_span ?? 5} − EMA${shortTerm?.momentum?.slow_span ?? 13} (ATRs) · solid = building, light = fading`
               : lowerStudy}
         </text>
         {lowerStudy === "MOMENTUM" && (

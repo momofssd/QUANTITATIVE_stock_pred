@@ -7,6 +7,7 @@ import {
   ReadinessPanel,
   ReasonsPanel,
   ShortTermHero,
+  SignalProfilePanel,
   TradePlanPanel,
   TrendOutlook,
 } from "./components/ZonePanels";
@@ -186,7 +187,7 @@ export default function App() {
               </div>
             )}
             <section className="decision-grid">
-              <ShortTermHero market={report.current_market} shortTerm={shortTerm} />
+              <ShortTermHero market={report.current_market} profile={report.signal_profile} shortTerm={shortTerm} />
             </section>
             <TrendOutlook outlook={report.trend_outlook} ticker={report.ticker} />
 
@@ -234,6 +235,7 @@ export default function App() {
                 <LevelLadder report={report} />
                 <ReadinessPanel readiness={shortTerm.bounce_readiness} />
                 <TradePlanPanel shortTerm={shortTerm} />
+                <SignalProfilePanel profile={report.signal_profile} />
                 <details className="panel signal-key">
                   <summary>How the zones are built</summary>
                   <div>
