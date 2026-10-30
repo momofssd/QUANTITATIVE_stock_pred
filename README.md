@@ -36,9 +36,9 @@ The default Gemini model is `gemini-4-argon`. You can set `GEMINI_MODEL` or pass
 
 The React frontend shows:
 
-- **Short-term card**: action (`TOP_SIGNAL`, `TOP_FORMING`, `TAKE_PROFIT_ZONE`, `SUPPORT_BREAKDOWN`, `BOTTOM_SIGNAL`, `BOTTOM_FORMING`, `ENTRY_ZONE_STILL_FALLING`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`), the latest bottom or top signal with its stop and target, current price, next-session buy and take-profit zones with distance, the interim low or high, a momentum gauge (value, phase, how much has faded, and the pivot close that turns it), a stretch-percentile gauge, and the replay of past signals (or, after a support breakdown, the historical continuation statistics)
+- **Short-term card**: action (`TOP_SIGNAL`, `TOP_FORMING`, `TAKE_PROFIT_ZONE`, `SUPPORT_BREAKDOWN`, `BREAKDOWN_MOMENTUM_EASING`, `BOTTOM_SIGNAL`, `BOTTOM_FORMING`, `ENTRY_ZONE_STILL_FALLING`, `BELOW_ENTRY_ZONE`, `APPROACHING_ENTRY`, `BOUNCE_UNDERWAY`, `WAIT_FOR_PULLBACK`), the latest bottom or top signal with its strength, stop and target, current price, next-session buy and take-profit zones with distance, the interim low or high, a momentum gauge (value, phase, how much has faded, and the pivot close that turns it), a stretch-percentile gauge, and the replay of past signals (or, after a support breakdown, the historical continuation statistics)
 - **Trend outlook**: bullish/bearish probability for the next 10 and 60 sessions, with the walk-forward record that decides whether the model or the base rate is trusted
-- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time, next session's zones at the right edge, markers on earlier zone touches (▲/▼ buy/take-profit) and momentum signals (◆ bottom/top) coloured by outcome, and a momentum / stretch / RSI / MACD lower pane
+- **Chart** (4H / 1D / 1W candles; 3M to 10Y ranges, with a log scale beyond one year and 3Y+ switching daily to weekly; 4-hour candles cover about the last two years and are built from Yahoo's hourly bars, adjusted to the daily price basis, with daily zones and indicators): adjusted candles with the zones drawn as they moved over time, next session's zones at the right edge, markers on earlier momentum signals (◆ below = bottom, above = top; large = strong; filled when momentum followed through, grey when under broken support), and a momentum / stretch / RSI / MACD lower pane
 - **Price ladder**: every level, highest first, with the move needed from the current price
 - **Bounce checklist**: stretched, oversold, bearish momentum fading, capitulation volume, reversal candle, reclaim of the prior high, and market backdrop
 - **Short-term trade plan**: entry, a stop under the interim low, and a 2R target, the same trade the signal replay grades
@@ -60,10 +60,23 @@ A buy zone tells you price is stretched, not that the selling has stopped. Buyin
 - **Momentum** = (EMA5 − EMA13) / ATR14: how fast price has been moving, in ATRs. Below 0 is bearish, above 0 bullish. Whether it is building or fading is read from the EMA spread itself, so a quiet session cannot make a stalled decline look like it is accelerating.
 - **Phase**: bearish building (still falling), bearish fading, bullish building, bullish fading. **Faded** = share of the 10-session extreme that has worn off.
 - **Pivot price**: both EMAs move linearly with the close, so there is an exact next-session close above which momentum rises and below which it falls.
-- **Bottom signal** (`BOTTOM_SIGNAL`): within 5 sessions of a buy-zone touch, momentum is still negative but has risen 2 sessions in a row. Entry at that close, stop 0.25 ATR under the 6-session low (at least 0.5 ATR away), target 2x the risk, exit after 10 sessions otherwise. One rising session is `BOTTOM_FORMING`; still falling is `ENTRY_ZONE_STILL_FALLING` or `BELOW_ENTRY_ZONE`.
+- **Bottom signal** (`BOTTOM_SIGNAL`): within 5 sessions of a buy-zone touch, momentum is still negative but has risen 2 sessions in a row. A zone touch never triggers on its own; it becomes a signal (and a chart marker) only once falling momentum fades. Entry at that close, stop 0.25 ATR under the 6-session low (at least 0.5 ATR away), target 2x the risk, exit after 10 sessions otherwise. Fading but not yet a signal is `BOTTOM_FORMING`; still falling is `ENTRY_ZONE_STILL_FALLING` or `BELOW_ENTRY_ZONE`.
+- **Strong signal**: within the touch window price also reached the far edge of the zone (the lower bound of the buy zone, the upper bound of the take-profit zone). It is labelled "Strong", drawn larger on the chart, and graded on the strong signals' own record.
+- **Support broken**: while a close below swing-low support from the last 5 sessions is still unreclaimed, a bottom signal is not a buy. Momentum still falling reads `SUPPORT_BREAKDOWN`; momentum fading reads `BREAKDOWN_MOMENTUM_EASING` (wait for a close back above the broken level). These signals are replayed separately and kept out of the headline numbers.
 - **Top signal** (`TOP_SIGNAL`): the mirror at the take-profit zone; bullish momentum fell 2 sessions in a row. The stop is 0.25 ATR above the 6-session high.
 
-Every past signal is replayed as that trade and scored in **R** (profit or loss as a multiple of the amount risked) against the same trade from every session's close. The edge grade is `EDGE` at +0.10R or more, `SLIGHT_EDGE` above 0, otherwise `NO_EDGE`, and a buy signal is shown as positive only with `EDGE` or `SLIGHT_EDGE`. The replay also reports how often the interim low (high) held for 10 sessions.
+Every past signal is replayed as that trade and scored in **R** (profit or loss as a multiple of the amount risked) against the same trade from every session's close. The edge grade is `EDGE` at +0.10R or more, `SLIGHT_EDGE` above 0, otherwise `NO_EDGE`, and a buy signal is shown as positive only with `EDGE` or `SLIGHT_EDGE`. The replay also reports how often the interim low (high) held for 10 sessions, and a momentum check: a signal is **valid** when, 10 sessions later, momentum has kept moving the expected way (higher after a bottom, lower after a top) without a new extreme beyond the one before the signal. Its baseline is the same check from every session with momentum on that side of zero.
+
+Across 29 cached tickers (default settings) when this was built:
+
+| Bottom signals | Avg R 2012–20 | Avg R 2021–26 | Low held | Momentum valid |
+|---|---|---|---|---|
+| Comparable days (baseline) | | | 49–52% | 43–45% |
+| Near edge only, support intact | +0.22 | −0.07 | 45–58% | 48–59% |
+| Reached the lower bound, support intact | +0.26 | +0.09 | 55–67% | 66–75% |
+| Fired during an active breakdown | +0.10 | +0.15 | 49–55% | 70–76% |
+
+Reaching the lower bound beat a near-edge touch in both periods, which is why strong signals carry more weight. Signals under broken support had their low break more often; their profit was mixed (worse before 2021, better after), so the dashboard waits for a reclaim. Momentum validity tracked profit closely: valid bottoms averaged +0.61R and failed ones −0.88R. For tops, momentum followed through 62% of the time vs 37% on comparable days, yet the short trades still lost money, most of all at the take-profit zone's upper bound.
 
 How the rule was chosen: momentum speeds (3/10, 5/13, 5/20, 8/21), one to three turning sessions, a close above the prior high, a minimum trough depth, RSI(2), price/momentum divergence, and a "still falling but slower" entry were compared on 2012–2020 only, then checked on 2021–2026. Results across 29 cached tickers when this was built:
 
@@ -90,11 +103,11 @@ For a tuned side, the card's edge grade uses the 2021–2026 out-of-sample resul
 
 | Ticker | Bottom (buy) | Top (sell) | Out of sample, tuned vs default |
 |---|---|---|---|
-| QQQ | Tuned: EMA8/21, touch within 3 | Default | buy +0.23R vs −0.02R |
-| SMH | Tuned: EMA5/20, touch within 3 | Default | buy +0.26R vs +0.16R |
-| TSLA | Tuned: EMA3/10, 3-session turn, touch within 3 | Tuned: 1-session turn, touch within 3 | buy −0.08R vs −0.24R; sell −0.06R vs −0.19R |
-| MU | Default (tuned winner was luck: rank correlation −0.07) | Tuned: 3-session turn | sell +0.29R vs +0.18R |
-| VOO | Default (rank correlation −0.27) | Default | — |
+| QQQ | Tuned: EMA8/21, touch within 3 | Default | buy +0.18R vs −0.08R |
+| SMH | Tuned: EMA5/20, touch within 3 | Default | buy +0.26R vs +0.17R |
+| TSLA | Tuned: EMA3/10, 3-session turn, touch within 3 | Tuned: 1-session turn, touch within 3 | buy −0.04R vs −0.14R; sell −0.06R vs −0.19R |
+| MU | Default (tuned winner was luck: rank correlation −0.19) | Tuned: 3-session turn | sell +0.29R vs +0.18R |
+| VOO | Default (rank correlation −0.02) | Default | — |
 
 TSLA's tuned signals lose less than the defaults but still do not beat trading on any day, and the card says so.
 
@@ -117,6 +130,16 @@ Support is the most recent confirmed swing low (the lowest low of an 11-session 
 Every earlier breakdown is replayed from its close: it "worked" (kept falling) when price dropped another 1.5 ATR before rising 1.5 ATR within 10 sessions, compared with the same downside bracket from every session's close. The replay also reports how often price closed back above the broken level within 10 sessions (failed breakdowns). When this was built, breakdowns in several large single stocks (AAPL, AMZN, GOOGL) kept falling 9–12 points more often than an arbitrary day, while broad ETFs (DIA, IWB, SMH, XLI) showed no edge, and 60–80% of breakdowns were reclaimed within 10 sessions. Read the ticker's own row before assuming a breakdown will continue.
 
 Levels are causal: the zone that applied on a day was computed only from data before it. The zones shown for the next session must be recomputed after every daily close.
+
+### Weekly DCA: which weekday to buy
+
+The report also simulates buying $100 every week at the close on each weekday (Monday to Friday) over the whole history, using split- and dividend-adjusted closes. When the weekday is a market holiday, that week's buy moves to the next trading session, even when that falls in the following week (Good Friday moves to Monday). Every strategy buys in the same calendar weeks; a week that has not finished yet is left out. Each weekday shows its average cost (total invested ÷ shares bought), the cost compared with the average of the five weekdays, the final value, how many calendar years it was cheapest, and how many buys moved off a holiday.
+
+In a rising market the earliest weekday wins this race just by buying a few days sooner each week. A second, trend-neutral measure therefore compares each buy's close with the average of the 5 sessions centred on it. A weekday edge is called **reliable** only when the cheapest weekday on that measure has t ≥ 2 and stays cheapest in both halves of the history.
+
+Below the full history, the panel repeats the simulation over only the last 52 complete weeks ($5,200 invested), with each weekday's full-history result alongside for comparison. One year gives just 52 buys per weekday, so the last-year ranking shows the recent pattern, not a dependable edge; it is never graded as reliable.
+
+When this was built (2012 to October 2026), Monday had the lowest average cost for QQQ, VOO, SMH, MU and TSLA, by 0.14–0.42%. That is about $345 (VOO) to $11,500 (MU) more final value on $100 a week. With the trend removed, none of them showed a reliable weekday edge except TSLA: Fridays closed about 29 bp below their neighbouring sessions in both halves (t = 3.6). AAPL showed the same Friday pattern. For the others the cheapest weekday changed between the two halves.
 
 From the repository root:
 

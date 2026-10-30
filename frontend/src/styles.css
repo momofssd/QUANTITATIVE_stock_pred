@@ -618,6 +618,17 @@ h1 {
   color: var(--muted);
 }
 
+.signal-callout .signal-warning {
+  color: var(--down);
+  font-weight: 700;
+}
+
+.evidence-table tr.subrow th {
+  color: var(--muted);
+  font-weight: 400;
+  padding-left: 22px;
+}
+
 /* Layout */
 
 .dashboard-layout {
@@ -911,6 +922,35 @@ h1 {
 
 .evidence-table thead th[title] {
   cursor: help;
+}
+
+.evidence-table tr.best-row th,
+.evidence-table tr.best-row td {
+  background: var(--green-soft);
+}
+
+.dca-summary {
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+
+.dca-t {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.dca-halves {
+  margin-top: 10px;
+}
+
+.dca-panel h3 {
+  margin-top: 22px;
+}
+
+.evidence-table td.dca-compare {
+  color: var(--muted);
 }
 
 .column-definitions {
@@ -1374,6 +1414,26 @@ h1 {
 .touch-marker.pending {
   fill: var(--surface);
   stroke-dasharray: 2 2;
+}
+
+.marker-halo {
+  fill: var(--surface);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.touch-marker.strong {
+  stroke-width: 2;
+}
+
+/* Signals that fired under broken support are shown but not recommended. */
+.touch-marker.blocked {
+  opacity: 0.55;
+  stroke: var(--muted);
+}
+
+.touch-marker.blocked.success {
+  fill: var(--muted);
 }
 
 .study-boundary {

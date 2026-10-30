@@ -14,6 +14,7 @@ const VIEW_LABELS = {
   TOP_FORMING: "Bullish momentum easing near the top",
   TAKE_PROFIT_ZONE: "Take-profit zone, momentum still rising",
   SUPPORT_BREAKDOWN: "Support breakdown",
+  BREAKDOWN_MOMENTUM_EASING: "Support broken, momentum easing: wait",
   BOTTOM_SIGNAL: "Buy signal: bearish momentum faded",
   BOTTOM_FORMING: "Bearish momentum easing",
   ENTRY_ZONE_STILL_FALLING: "In buy zone, momentum still falling",

@@ -102,7 +102,8 @@ def _train_blocks(index: pd.DatetimeIndex) -> list[tuple[str, str]]:
 def evaluate(ohlc: pd.DataFrame, signals: SignalParams, side: str, baseline: pd.DataFrame, zones: pd.DataFrame | None = None) -> dict:
     """Training, per-block, and holdout metrics for one setting on one side."""
     zones = compute_zone_frame(ohlc, signals) if zones is None else zones
-    trades = signal_trades(ohlc, zones, side, signals)
+    # Only the signals the dashboard recommends: bottoms during an active support breakdown are excluded.
+    trades = [trade for trade in signal_trades(ohlc, zones, side, signals) if not trade["during_breakdown"]]
     end = str((ohlc.index[-1] + pd.Timedelta(days=1)).date())
     blocks = [_period_metrics(trades, baseline, start, stop) for start, stop in _train_blocks(ohlc.index)]
     scored = [block["edge_r"] for block in blocks if block["edge_r"] is not None and block["signals"] >= 3]

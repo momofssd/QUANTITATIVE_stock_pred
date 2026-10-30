@@ -135,13 +135,15 @@ function MomentumGauge({ momentum }) {
   );
 }
 
-function SignalCallout({ signal }) {
+function SignalCallout({ signal, blocked }) {
   if (!signal) return null;
   const buy = signal.side === "buy";
+  const strong = signal.strength === "strong";
   return (
-    <div className={`signal-callout ${buy ? "buy" : "sell"}${signal.active ? "" : " stale"}`}>
+    <div className={`signal-callout ${buy ? "buy" : "sell"}${signal.active && !blocked ? "" : " stale"}`}>
       <strong>
-        {buy ? "Bottom signal" : "Top signal"} {signal.date}
+        {strong ? "Strong " : ""}
+        {buy ? (strong ? "bottom signal" : "Bottom signal") : strong ? "top signal" : "Top signal"} {signal.date}
         {signal.sessions_ago ? ` (${signal.sessions_ago} session${signal.sessions_ago > 1 ? "s" : ""} ago)` : " (today)"}
       </strong>
       <span>
@@ -149,6 +151,8 @@ function SignalCallout({ signal }) {
         {dollar(signal.stop)} · target {dollar(signal.target)} ·{" "}
         {signal.active ? `${fixed(signal.reward_risk_now, 1)}:1 left from today` : "most of the move is already done"}
       </span>
+      {strong && <span>Price reached the {buy ? "lower bound of the buy zone" : "upper bound of the take-profit zone"}, so this signal carries more weight.</span>}
+      {blocked && <span className="signal-warning">Support is broken and price is still under it: not a buy until it closes back above the broken level.</span>}
     </div>
   );
 }
@@ -158,8 +162,12 @@ export function ShortTermHero({ shortTerm, market, profile }) {
   const momentum = shortTerm.momentum;
   const edge = shortTerm.historical_edge;
   const breakdown = shortTerm.breakdown?.active ? shortTerm.breakdown : null;
+  const easing = shortTerm.action === "BREAKDOWN_MOMENTUM_EASING";
   const sellSide = SELL_ACTIONS.has(shortTerm.action);
-  const [edgeTone, edgeLabel] = breakdown ? BREAKDOWN_EDGE[edge.grade] : [EDGE_TONE[edge.grade], edge.label];
+  // The breakdown chip grades continuation; once momentum eases it grades the bottom signals instead.
+  const [edgeTone, edgeLabel] = breakdown && !easing ? BREAKDOWN_EDGE[edge.grade] : [EDGE_TONE[edge.grade], edge.label];
+  const bottom = history.momentum_bottom;
+  const underSupport = { ...bottom.during_breakdown, horizon_sessions: bottom.horizon_sessions, target_r: bottom.target_r };
   const touch = history.buy_zone;
   return (
     <section className={`hero-card ${shortTerm.tone}`}>
@@ -175,7 +183,7 @@ export function ShortTermHero({ shortTerm, market, profile }) {
       </div>
       <h2>{shortTerm.action_label}</h2>
       <p className="summary">{shortTerm.action_definition}</p>
-      <SignalCallout signal={momentum.signal} />
+      <SignalCallout blocked={easing && momentum.signal?.side === "buy"} signal={momentum.signal} />
       <div className="hero-facts">
         <Fact
           detail={`${signedPercent(market.change_pct)} today · ${market.trend.toLowerCase()}`}
@@ -207,7 +215,9 @@ export function ShortTermHero({ shortTerm, market, profile }) {
         sellLabel="Take-profit"
         valueLabel={`${fixed(shortTerm.stretch.current_atr, 2)} ATR · ${ordinal(shortTerm.stretch.percentile)} percentile`}
       />
-      {breakdown ? (
+      {easing ? (
+        <SignalStats label="bottom signals under broken support" side="buy" study={underSupport} />
+      ) : breakdown ? (
         <BreakdownStats breakdown={breakdown} study={history.breakdown} />
       ) : (
         <SignalStats
@@ -217,7 +227,7 @@ export function ShortTermHero({ shortTerm, market, profile }) {
         />
       )}
       <p className="footnote">
-        {breakdown
+        {breakdown && !easing
           ? `A breakdown kept falling when price dropped another ${touch.bracket_atr} ATR before rising ${touch.bracket_atr} ATR within ${touch.horizon_sessions} sessions. Compare the rate with the any-day baseline, not with 100%.`
           : `Each past signal is replayed as the trade shown here: stop beyond the interim ${sellSide ? "high" : "low"}, target ${history.momentum_bottom.target_r}x the risk, exit after ${history.momentum_bottom.horizon_sessions} sessions otherwise. R = profit or loss as a multiple of the amount risked. Compare with the same trade on any day, not with zero.`}
       </p>
@@ -225,14 +235,19 @@ export function ShortTermHero({ shortTerm, market, profile }) {
   );
 }
 
-function SignalStats({ side, study, tuned }) {
-  const kind = side === "buy" ? "bottom" : "top";
+function SignalStats({ side, study, tuned, label }) {
+  const kind = label || `${side === "buy" ? "bottom" : "top"} signals`;
   const extreme = side === "buy" ? "low" : "high";
   return (
     <div className="hero-stats">
       <Stat
+        detail={`vs ${percent(study.baseline_momentum_follow_rate, 0)} of days with ${side === "buy" ? "bearish" : "bullish"} momentum`}
+        label={`Momentum kept ${side === "buy" ? "rising" : "falling"} for ${study.horizon_sessions} sessions (valid signal)`}
+        value={percent(study.momentum_follow_rate, 0)}
+      />
+      <Stat
         detail={`vs ${signedR(study.baseline_expectancy_r)} on any day · ${study.episodes} signals${tuned ? " · includes the years the settings were tuned on" : ""}`}
-        label={`Average result of past ${kind} signals`}
+        label={`Average result of past ${kind}`}
         value={signedR(study.expectancy_r)}
       />
       <Stat
@@ -244,11 +259,6 @@ function SignalStats({ side, study, tuned }) {
         detail={`${percent(study.stop_rate, 0)} stopped · the rest exited after ${study.horizon_sessions} sessions`}
         label={`Reached the ${study.target_r}R target`}
         value={percent(study.success_rate, 0)}
-      />
-      <Stat
-        detail={`median, in ATRs, after the signal`}
-        label={side === "buy" ? "Further dip after buying" : "Further rise after selling"}
-        value={fixed(study.median_further_move_atr, 2)}
       />
     </div>
   );
@@ -489,6 +499,8 @@ function signalColumns(study) {
     ["Stopped", `Share that hit the stop first. The rest closed at the price after ${study.horizon_sessions} sessions.`],
     ["Held", `How often the interim low (high) before the signal was not broken within ${study.horizon_sessions} sessions: the signal caught a real turn.`],
     ["Any day held", "The same check from every session, for comparison."],
+    ["Momentum valid", `How often momentum kept moving the expected way for ${study.horizon_sessions} sessions after the signal, with no new extreme beyond the one before it.`],
+    ["Any day momentum", "The same momentum check from every session whose momentum was on the same side of zero."],
     ["Current trend context", "Hit-target rate for signals made on the same side of the 200-day MA as today, with the count."],
   ];
 }
@@ -497,7 +509,12 @@ function MomentumSignalTable({ bottom, top }) {
   const columns = signalColumns(bottom);
   const rows = [
     ["Bottom signal: bearish momentum faded (buy)", bottom],
+    ["   strong: reached the buy zone's lower bound", bottom.by_strength.strong],
+    ["   standard: near edge only", bottom.by_strength.standard],
+    ["   under broken support (not recommended)", bottom.during_breakdown],
     ["Top signal: bullish momentum faded (sell)", top],
+    ["   strong: reached the take-profit zone's upper bound", top.by_strength.strong],
+    ["   standard: near edge only", top.by_strength.standard],
   ];
   return (
     <>
@@ -517,8 +534,8 @@ function MomentumSignalTable({ bottom, top }) {
         </thead>
         <tbody>
           {rows.map(([label, study]) => (
-            <tr key={label}>
-              <th scope="row">{label}</th>
+            <tr className={label.startsWith(" ") ? "subrow" : ""} key={label}>
+              <th scope="row">{label.trim()}</th>
               <td>{study.episodes}</td>
               <td>{signedR(study.expectancy_r)}</td>
               <td>{signedR(study.median_r)}</td>
@@ -528,7 +545,9 @@ function MomentumSignalTable({ bottom, top }) {
               <td>{percent(study.stop_rate, 0)}</td>
               <td>{percent(study.held_rate, 0)}</td>
               <td>{percent(study.baseline_held_rate, 0)}</td>
-              <td>{contextRate(study)}</td>
+              <td>{percent(study.momentum_follow_rate, 0)}</td>
+              <td>{percent(study.baseline_momentum_follow_rate, 0)}</td>
+              <td>{study.by_trend ? contextRate(study) : "-"}</td>
             </tr>
           ))}
         </tbody>

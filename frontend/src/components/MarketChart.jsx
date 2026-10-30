@@ -45,24 +45,35 @@ const ZONES = [
   { key: "st_sell", label: "ST take-profit", kind: "sell", term: "short" },
 ];
 
+// A zone touch only becomes a marker once momentum has faded, so every marker is a momentum signal.
 const TOUCH_LABELS = {
-  st_buy: "Buy-zone touch",
-  st_sell: "Sell-zone touch",
-  mom_buy: "Bottom signal (bearish momentum faded)",
-  mom_sell: "Top signal (bullish momentum faded)",
+  mom_buy: "Bottom signal",
+  mom_sell: "Top signal",
 };
 
-function outcomeText(zone, outcome) {
-  if (zone === "mom_buy" || zone === "mom_sell") {
-    if (outcome === "success") return "reached the 2R target before the stop";
-    if (outcome === "failed") return zone === "mom_buy" ? "broke the interim low (stop) first" : "broke the interim high (stop) first";
-    if (outcome === "expired") return "neither level within 10 sessions";
-    return "still open";
-  }
-  if (outcome === "success") return zone === "st_buy" ? "bounced 1.5 ATR before dropping 1.5 ATR" : "pulled back 1.5 ATR before extending 1.5 ATR";
-  if (outcome === "failed") return zone === "st_buy" ? "dropped 1.5 ATR first" : "extended 1.5 ATR higher first";
-  if (outcome === "expired") return "no decision within 10 sessions";
-  return "still open";
+function priceText(zone, outcome) {
+  if (outcome === "success") return "price reached the 2R target";
+  if (outcome === "failed") return zone === "mom_buy" ? "price broke the interim low (stop)" : "price broke the interim high (stop)";
+  if (outcome === "expired") return "price hit neither level in 10 sessions";
+  return "price outcome still open";
+}
+
+function momentumText(zone, followed) {
+  if (followed === null || followed === undefined) return "momentum check still open";
+  if (zone === "mom_buy") return followed ? "momentum kept rising (valid)" : "momentum turned back down (failed)";
+  return followed ? "momentum kept falling (valid)" : "momentum turned back up (failed)";
+}
+
+function signalText(touch) {
+  const kind = touch.strength === "strong" ? "strong " : "";
+  const blocked = touch.during_breakdown ? " · under broken support, not recommended" : "";
+  return `${kind}${TOUCH_LABELS[touch.zone].toLowerCase()}: ${momentumText(touch.zone, touch.momentum_followed)}; ${priceText(touch.zone, touch.outcome)}${blocked}`;
+}
+
+// Marker fill follows the momentum check: filled = valid, hollow = failed, dashed = not yet known.
+function validityClass(followed) {
+  if (followed === null || followed === undefined) return "pending";
+  return followed ? "success" : "failed";
 }
 
 const valid = (number) => typeof number === "number" && Number.isFinite(number);
@@ -168,25 +179,32 @@ function spreadLabels(labels, minimumGap, top, bottom) {
   return arranged;
 }
 
-function Diamond({ x, y, className, title }) {
-  const size = 5.5;
+function Diamond({ x, y, className, title, size = 5.5 }) {
+  const shape = (half) => `${x},${y - half} ${x + half},${y} ${x},${y + half} ${x - half},${y}`;
   return (
-    <polygon className={className} points={`${x},${y - size} ${x + size},${y} ${x},${y + size} ${x - size},${y}`}>
-      <title>{title}</title>
-    </polygon>
+    <g>
+      {/* A halo in the page colour keeps the marker readable over zone bands and nearby candles. */}
+      <polygon className="marker-halo" points={shape(size + 2.5)} />
+      <polygon className={className} points={shape(size)}>
+        <title>{title}</title>
+      </polygon>
+    </g>
   );
 }
 
-function Triangle({ x, y, up, className, title }) {
-  const size = 5;
-  const points = up
-    ? `${x},${y - size} ${x - size},${y + size} ${x + size},${y + size}`
-    : `${x},${y + size} ${x - size},${y - size} ${x + size},${y - size}`;
-  return (
-    <polygon className={className} points={points}>
-      <title>{title}</title>
-    </polygon>
-  );
+// Signals fire a few sessions after the turn, so neighbouring candles often reach further than the
+// signal bar. Markers sit clear of the extreme of the surrounding bars rather than the bar itself.
+const MARKER_NEIGHBOURS = 3;
+const MARKER_GAP = 5;
+
+function markerY(points, index, bottom, size, priceY, paneTop, paneBottom) {
+  const around = points.slice(Math.max(index - MARKER_NEIGHBOURS, 0), index + MARKER_NEIGHBOURS + 1);
+  if (bottom) {
+    const lows = around.map((point) => point.low).filter(valid);
+    return Math.min(priceY(Math.min(...lows)) + size + MARKER_GAP, paneBottom - size);
+  }
+  const highs = around.map((point) => point.high).filter(valid);
+  return Math.max(priceY(Math.max(...highs)) - size - MARKER_GAP, paneTop + size);
 }
 
 export default function MarketChart({ chart, shortTerm }) {
@@ -195,7 +213,7 @@ export default function MarketChart({ chart, shortTerm }) {
   const [priceHeight, setPriceHeight] = useState(DEFAULT_PRICE_HEIGHT);
   const [dragging, setDragging] = useState(false);
   const [lowerStudy, setLowerStudy] = useState("MOMENTUM");
-  const [layers, setLayers] = useState({ short: true, shortTouches: true, momentum: true });
+  const [layers, setLayers] = useState({ short: true, momentum: true });
   const [activeIndex, setActiveIndex] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
@@ -296,11 +314,13 @@ export default function MarketChart({ chart, shortTerm }) {
   const sessionsPerBar = shownSessions / visiblePoints.length;
   zoomRef.current = { dataRight: nextStart, total: totalSessions };
 
+  // Fit the price scale to what is on screen: the bars in view, their zones, and the next-session
+  // block only when it is drawn. Today's levels would otherwise squash a view from years ago.
   const priceValues = visiblePoints.flatMap((point) => [point.high, point.low, point.ema20, point.ma50, point.ma200].filter(valid));
   shownZones.forEach((zone) => {
     visiblePoints.forEach((point) => priceValues.push(...[point[`${zone.key}_low`], point[`${zone.key}_high`]].filter(valid)));
     const next = nextZones[zone.key];
-    if (next) priceValues.push(...[next.low, next.high].filter(valid));
+    if (atLatest && next) priceValues.push(...[next.low, next.high].filter(valid));
   });
   const minPrice = Math.min(...priceValues);
   const maxPrice = Math.max(...priceValues);
@@ -365,7 +385,7 @@ export default function MarketChart({ chart, shortTerm }) {
   );
   const firstVisibleYear = visiblePoints[0].date.slice(0, 4);
   const hovered = visiblePoints[Math.min(activeIndex ?? latestIndex, latestIndex)];
-  const markerZones = [...(layers.shortTouches ? ["st_buy", "st_sell"] : []), ...(layers.momentum ? ["mom_buy", "mom_sell"] : [])];
+  const markerZones = layers.momentum ? ["mom_buy", "mom_sell"] : [];
   const hoveredTouches = markerZones.map((zone) => touchesByDate.get(`${hovered.key}:${zone}`)).filter(Boolean);
   const barName = BAR_SIZES.find((size) => size.key === barSize).name;
   const hoveredLabel = barSize === "1W" ? `Week of ${hovered.date}` : barSize === "4H" ? `${hovered.date} ${hovered.time}` : hovered.date;
@@ -495,11 +515,6 @@ export default function MarketChart({ chart, shortTerm }) {
           <span className="swatch zone-short" /> Short-term zones
         </label>
         <label className="layer-toggle">
-          <input checked={layers.shortTouches} onChange={() => toggle("shortTouches")} type="checkbox" />
-          <span className="swatch touch" />
-          <span className="swatch touch sell" /> Short-term touches
-        </label>
-        <label className="layer-toggle">
           <input checked={layers.momentum} onChange={() => toggle("momentum")} type="checkbox" />
           <span className="swatch signal" />
           <span className="swatch signal sell" /> Momentum signals
@@ -527,7 +542,7 @@ export default function MarketChart({ chart, shortTerm }) {
         <span className="readout-touch">
           {hoveredTouches.map((touch) => (
             <span className={`touch-note ${touch.zone}`} key={touch.zone}>
-              {TOUCH_LABELS[touch.zone]}: {outcomeText(touch.zone, touch.outcome)}
+              {signalText(touch)}
             </span>
           ))}
         </span>
@@ -619,29 +634,24 @@ export default function MarketChart({ chart, shortTerm }) {
             markerZones.map((zone) => {
               const touch = touchesByDate.get(`${point.key}:${zone}`);
               if (!touch) return null;
-              if (zone === "mom_buy" || zone === "mom_sell") {
-                // Sits beyond the touch triangle so both stay visible on the same bar.
-                const bottom = zone === "mom_buy";
-                return (
-                  <Diamond
-                    className={`touch-marker signal ${bottom ? "buy" : "sell"} ${touch.outcome}`}
-                    key={`${zone}-${point.key}`}
-                    title={`${touch.date} ${bottom ? "bottom" : "top"} signal at ${money(touch.entry)}: ${outcomeText(zone, touch.outcome)}`}
-                    x={xAt(index)}
-                    y={bottom ? Math.min(priceY(point.low) + 24, TOP + PRICE_HEIGHT + 6) : Math.max(priceY(point.high) - 24, TOP - 6)}
-                  />
-                );
-              }
-              const buy = zone === "st_buy";
-              const y = buy ? priceY(point.low) + 10 : priceY(point.high) - 10;
+              const bottom = zone === "mom_buy";
+              const strong = touch.strength === "strong";
+              const classes = [
+                "touch-marker signal",
+                bottom ? "buy" : "sell",
+                validityClass(touch.momentum_followed),
+                strong ? "strong" : "",
+                touch.during_breakdown ? "blocked" : "",
+              ];
+              const size = strong ? 7 : 5;
               return (
-                <Triangle
-                  className={`touch-marker ${buy ? "buy" : "sell"} ${touch.outcome}`}
+                <Diamond
+                  className={classes.filter(Boolean).join(" ")}
                   key={`${zone}-${point.key}`}
-                  title={`${touch.date} ${buy ? "buy" : "sell"}-zone touch at ${money(touch.entry)}: ${outcomeText(touch.zone, touch.outcome)}`}
-                  up={buy}
+                  size={size}
+                  title={`${touch.date} at ${money(touch.entry)}: ${signalText(touch)}${valid(touch.r_multiple) ? ` (${touch.r_multiple > 0 ? "+" : ""}${touch.r_multiple.toFixed(2)}R)` : ""}`}
                   x={xAt(index)}
-                  y={y}
+                  y={markerY(visiblePoints, index, bottom, size, priceY, TOP, TOP + PRICE_HEIGHT)}
                 />
               );
             }),
@@ -771,10 +781,10 @@ export default function MarketChart({ chart, shortTerm }) {
         <span />
       </div>
       <p className="chart-footnote">
-        ▲ below a candle = first touch of the short-term buy zone; ▼ above = first touch of the take-profit zone. Filled = price
-        moved 1.5 ATR in the expected direction before 1.5 ATR against; hollow = it did not. ◆ = momentum signal (below = bottom,
-        above = top); filled = reached the 2R target before the stop beyond the interim low or high. Dashed = outcome still open.
-        Hover a marker for details.
+        ◆ below a candle = bottom signal, above = top signal: price touched the zone and momentum then faded for the ticker's turn
+        length. Large ◆ = strong (price reached the far edge of the zone). Filled = momentum kept moving the expected way for the
+        next 10 sessions (valid); hollow = it turned back (failed); dashed = fewer than 10 sessions so far. Grey = fired under
+        broken support, not recommended. Hover a marker for the price result.
       </p>
     </section>
   );

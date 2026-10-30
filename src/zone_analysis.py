@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .data_loader import MarketDataUnavailableError, download_intraday, load_market_data
+from .dca import weekly_dca_study
 from .entry_zones import (
     BOUNCE_ATR,
     DEFAULT_SIGNALS,
@@ -54,7 +55,8 @@ SHORT_TERM_ACTIONS = {
     "TOP_SIGNAL": ("Sell signal: bullish momentum faded", "negative", "Price reached the take-profit zone and momentum has fallen {turn} session(s) in a row, so buying is losing force. Take profits on longs; the top fails if price closes above the interim high."),
     "TOP_FORMING": ("Bullish momentum easing near the top", "caution", "Price touched the take-profit zone and bullish momentum is easing, but there is no actionable top signal: the {turn}-session turn is not complete, or most of the move after it is already done. A close below the momentum pivot keeps the turn going."),
     "TAKE_PROFIT_ZONE": ("Take-profit zone, momentum still rising", "negative", "Price is stretched into the take-profit zone but bullish momentum is still building. Tops usually come after momentum fades: avoid new entries and trail a stop rather than guessing the high."),
-    "SUPPORT_BREAKDOWN": ("Support breakdown", "negative", "Price closed below its most recent swing-low support and has not reclaimed it; breakdowns can keep falling. Do not buy until price closes back above the broken level."),
+    "SUPPORT_BREAKDOWN": ("Support breakdown", "negative", "Price closed below its most recent swing-low support and has not reclaimed it, and momentum is still falling; breakdowns can keep falling. Do not buy until price closes back above the broken level."),
+    "BREAKDOWN_MOMENTUM_EASING": ("Support broken, momentum easing: wait", "caution", "Price closed below swing-low support and is still under it. Bearish momentum is fading, but bottoms that fire under broken support fail more often, so this is not a buy yet: wait for a close back above the broken level."),
     "BOTTOM_SIGNAL": ("Buy signal: bearish momentum faded", "positive", "Price touched the buy zone and momentum has risen {turn} session(s) in a row, so the selling is losing force. The stop goes under the interim low: if that low breaks, the bottom failed."),
     "BOTTOM_FORMING": ("Bearish momentum easing", "caution", "Price is at or near the buy zone and bearish momentum is fading, but there is no actionable buy signal: the {turn}-session turn is not complete, or most of the bounce after it is already done. A close above the momentum pivot keeps the turn going."),
     "ENTRY_ZONE_STILL_FALLING": ("In buy zone, momentum still falling", "caution", "Price is in the buy zone but momentum is still falling, with no bearish turn yet. Buying now is catching a falling knife; wait for momentum to turn up."),
@@ -64,6 +66,11 @@ SHORT_TERM_ACTIONS = {
     "WAIT_FOR_PULLBACK": ("Wait for pullback", "neutral", "Price is between zones; wait for a pullback into the buy zone and a momentum turn."),
 }
 SELL_ACTIONS = {"TOP_SIGNAL", "TOP_FORMING", "TAKE_PROFIT_ZONE"}
+BREAKDOWN_ACTIONS = {"SUPPORT_BREAKDOWN", "BREAKDOWN_MOMENTUM_EASING"}
+STRONG_LABELS = {
+    "BOTTOM_SIGNAL": ("Strong buy signal: bearish momentum faded at the zone's low", "Price reached the lower bound of the buy zone"),
+    "TOP_SIGNAL": ("Strong sell signal: bullish momentum faded at the zone's high", "Price reached the upper bound of the take-profit zone"),
+}
 
 PHASE_TEXT = {
     "BEARISH_BUILDING": "bearish and still building",
@@ -162,6 +169,19 @@ def _signal_reasons(study: dict, kind: str) -> tuple[list[str], list[str]]:
         f"same trade on any day ({study['episodes']} signals); the interim {extreme} held {study['held_rate']:.0%} of the time "
         f"vs {study['baseline_held_rate']:.0%} on any day."
     ]
+    if study["momentum_follow_rate"] is not None and study["baseline_momentum_follow_rate"] is not None:
+        direction = "rising" if kind == "bottom" else "falling"
+        reasons.append(
+            f"After {study['momentum_follow_rate']:.0%} of past {kind} signals, momentum kept {direction} for the next "
+            f"{SHORT_TERM_HORIZON} sessions, vs {study['baseline_momentum_follow_rate']:.0%} of comparable days."
+        )
+    strong, standard = study["by_strength"]["strong"], study["by_strength"]["standard"]
+    if strong["sufficient_sample"] and standard["sufficient_sample"]:
+        edge = "lower bound of the buy zone" if kind == "bottom" else "upper bound of the take-profit zone"
+        reasons.append(
+            f"Signals that reached the {edge} averaged {strong['expectancy_r']:+.2f}R ({strong['episodes']}) vs "
+            f"{standard['expectancy_r']:+.2f}R for the rest ({standard['episodes']})."
+        )
     risks = [] if (study["edge_r"] or 0) > 0 else [f"{kind.capitalize()} signals have not beaten trading on an arbitrary day for this ticker."]
     return reasons, risks
 
@@ -207,8 +227,9 @@ def _short_term_view(
     elif sell_position in {"INSIDE", "ABOVE"}:
         action = "TAKE_PROFIT_ZONE"
     elif breakdown["active"]:
-        # A close through support overrides the bottom reading until the level is reclaimed.
-        action = "SUPPORT_BREAKDOWN"
+        # A close through support overrides the bottom reading until the level is reclaimed, even once
+        # momentum starts to fade: falling momentum may resume below broken support.
+        action = "BREAKDOWN_MOMENTUM_EASING" if phase == "BEARISH_FADING" else "SUPPORT_BREAKDOWN"
     elif signal:
         action = "BOTTOM_SIGNAL"
     elif near_buy and phase == "BEARISH_FADING":
@@ -225,12 +246,23 @@ def _short_term_view(
         action = "WAIT_FOR_PULLBACK"
     label, tone, definition = SHORT_TERM_ACTIONS[action]
     definition = definition.format(turn=signals.turn("sell" if action in SELL_ACTIONS else "buy"))
+    strength = signal["strength"] if signal else None
+    if strength == "strong" and action in STRONG_LABELS:
+        label, lead = STRONG_LABELS[action]
+        definition = f"{lead}, which weighs more than a touch of its near edge. {definition}"
+    side = "sell" if action in SELL_ACTIONS else "buy"
+    study = top_study if side == "sell" else bottom_study
     if action == "SUPPORT_BREAKDOWN":
         edge = _edge_grade(broken_study)
-    else:
-        side = "sell" if action in SELL_ACTIONS else "buy"
+    elif action == "BREAKDOWN_MOMENTUM_EASING":
+        edge = _r_edge_grade({**study["during_breakdown"], "basis": "past bottom signals during an active support breakdown"})
+    elif (holdout or {}).get(side):
         # Tuned settings are graded on their holdout record, not on the history they were tuned on.
-        edge = _r_edge_grade((holdout or {}).get(side) or (top_study if side == "sell" else bottom_study))
+        edge = _r_edge_grade(holdout[side])
+    elif strength and study["by_strength"][strength]["sufficient_sample"]:
+        edge = _r_edge_grade({**study["by_strength"][strength], "basis": f"past {strength} signals"})
+    else:
+        edge = _r_edge_grade(study)
     # A setup this ticker's own history does not reward is never shown as a green light.
     if tone == "positive" and edge["grade"] not in {"EDGE", "SLIGHT_EDGE"}:
         tone = "caution"
@@ -240,7 +272,7 @@ def _short_term_view(
         reference, reference_basis = close, f"current close; the bottom signal fired on {signal['date']} at {signal['entry']:.2f}"
         stop, stop_basis = signal["stop"], f"{STOP_BUFFER_ATR:g} ATR under the interim low (set at the signal): below it the bottom failed"
         target_1, target_1_basis = signal["target"], f"{TARGET_R:g}x the risk from the signal close, the replay's target"
-    elif action == "SUPPORT_BREAKDOWN":
+    elif action in BREAKDOWN_ACTIONS:
         reference, reference_basis = breakdown["broken_level"], "close back above the broken support (failed breakdown)"
         stop, stop_basis = reference - BOUNCE_ATR * atr, f"{BOUNCE_ATR:g} ATR below the reclaim level"
         target_1, target_1_basis = None, None
@@ -259,8 +291,8 @@ def _short_term_view(
         target_1, target_1_basis = None, None
     risk = max(reference - stop, 0.01)
     if target_1 is None:
-        target_1 = reference + (BOUNCE_ATR * atr if action == "SUPPORT_BREAKDOWN" else TARGET_R * risk)
-        target_1_basis = f"{BOUNCE_ATR:g} ATR rebound" if action == "SUPPORT_BREAKDOWN" else f"{TARGET_R:g}x the risk, the replay's target"
+        target_1 = reference + (BOUNCE_ATR * atr if action in BREAKDOWN_ACTIONS else TARGET_R * risk)
+        target_1_basis = f"{BOUNCE_ATR:g} ATR rebound" if action in BREAKDOWN_ACTIONS else f"{TARGET_R:g}x the risk, the replay's target"
     target_2 = max(sell_low, target_1)
     trade_plan = {
         "entry_reference": clean_float(reference, 2),
@@ -293,7 +325,7 @@ def _short_term_view(
             )
         if phase == "BULLISH_BUILDING":
             risks.append("Bullish momentum is still building; selling into it often leaves the last leg on the table.")
-    elif action == "SUPPORT_BREAKDOWN":
+    elif action in BREAKDOWN_ACTIONS:
         # Bounce statistics argue for the opposite trade, so the breakdown evidence replaces them.
         reasons = [
             f"Closed below swing-low support at {breakdown['broken_level']:.2f} on {breakdown['breakdown_date']}; "
@@ -311,6 +343,16 @@ def _short_term_view(
                 risks.append(f"{broken_study['reclaim_rate']:.0%} of earlier breakdowns closed back above the broken level within {SHORT_TERM_HORIZON} sessions.")
         else:
             risks.insert(0, f"Only {broken_study['episodes']} completed support breakdowns in the history; statistics are thin.")
+        if action == "BREAKDOWN_MOMENTUM_EASING":
+            under = bottom_study["during_breakdown"]
+            reasons.insert(1, f"Bearish momentum is fading ({momentum['value_atr']:+.2f} ATR), but price is still under the broken level.")
+            if under["sufficient_sample"]:
+                risks.insert(
+                    0,
+                    f"Past bottom signals under broken support averaged {under['expectancy_r']:+.2f}R and their low held "
+                    f"{under['held_rate']:.0%} of the time ({under['episodes']} signals), vs {bottom_study['expectancy_r']:+.2f}R and "
+                    f"{bottom_study['held_rate']:.0%} with support intact.",
+                )
     else:
         signal_reasons, signal_risks = _signal_reasons(bottom_study, "bottom")
         reasons += signal_reasons
@@ -363,7 +405,8 @@ def _short_term_view(
         "reasons": reasons[:6],
         "risks": risks[:5],
     }
-    return view, {"st_buy": buy_study, "st_sell": sell_study, "mom_buy": bottom_study, "mom_sell": top_study}
+    # A zone touch only becomes a chart event once momentum has faded, so the markers are the signals.
+    return view, {"mom_buy": bottom_study, "mom_sell": top_study}
 
 
 def _four_hour_bars(intraday: pd.DataFrame | None, features: pd.DataFrame) -> list[dict]:
@@ -444,6 +487,10 @@ def _chart_data(
                         "zone": key,
                         "entry": clean_float(episode["entry"], 2),
                         "outcome": episode["outcome"],
+                        "strength": episode.get("strength"),
+                        "momentum_followed": episode.get("momentum_followed"),
+                        "during_breakdown": episode.get("during_breakdown", False),
+                        "r_multiple": clean_float(episode.get("r_multiple"), 2),
                     }
                 )
     return {
@@ -567,7 +614,7 @@ def build_zone_report(
     previous_close = float(ohlc["close"].iloc[-2])
     ma200 = float(last["ma200"]) if np.isfinite(last["ma200"]) else None
     return {
-        "schema_version": "4.0",
+        "schema_version": "4.1",
         "analysis_type": "price_zones",
         "ticker": ticker.upper(),
         "as_of_date": str(features.index[-1].date()),
@@ -586,6 +633,7 @@ def build_zone_report(
         },
         "short_term": short_term,
         "signal_profile": _signal_profile(ticker, signals, profile),
+        "weekly_dca": weekly_dca_study(ohlc),
         "trend_outlook": {key: trend_outlook(ohlc, zones, features, horizon) for key, horizon in TREND_HORIZONS.items()},
         "technical_indicators": {
             "ema20": clean_float(last["ema20"], 2),

@@ -12,6 +12,7 @@ The JSON (`schema_version` 4.x, `analysis_type: price_zones`) contains:
 - `signal_profile`: the momentum-signal settings used for this ticker and, for a tuned ticker, their out-of-sample validation
 - `short_term`: action, buy zone, sell zone, stretch, `momentum` (value, phase, fade, pivot price, interim low/high, latest signal, the settings' EMA speeds and turn lengths), bounce checklist (`bounce_readiness`), support breakdown state (`breakdown`), trade plan, historical replays (`history.buy_zone`, `history.momentum_bottom`, `history.sell_zone`, `history.momentum_top`, `history.breakdown`), `historical_edge`, reasons, risks
 - `trend_outlook.short_term` / `trend_outlook.long_term`: probability of a higher close in 10 / 60 sessions
+- `weekly_dca`: a simulation of buying a fixed amount every week on each weekday, and which weekday had the lowest average cost
 - `technical_indicators`, `macro_context`, `data_quality`
 
 ## How to interpret each part
@@ -29,7 +30,8 @@ The JSON (`schema_version` 4.x, `analysis_type: price_zones`) contains:
 - `pivot_price`: the next close above which momentum rises (below which it falls). This is the concrete price that confirms or delays a turn.
 - `interim_low` / `interim_high`: the 6-session extreme. A bottom fails if the low breaks; a top fails if the high is exceeded.
 - `signal`: the latest bottom (`side: buy`) or top (`side: sell`) signal within 3 sessions, with entry, stop, target, `reward_risk_now`, and whether it is still `active` (at least 1:1 left).
-- Action meanings: buy signal = touched the buy zone and bearish momentum faded for the required sessions in a row; bearish momentum easing = fading but no actionable signal yet; in buy zone, momentum still falling = do not buy yet; sell signal = touched the take-profit zone and bullish momentum faded for the required sessions; bullish momentum easing near the top = fading but no actionable signal yet; take-profit zone, momentum still rising = trail, do not guess the high.
+- `signal.strength`: `strong` = price also reached the far edge of the zone (the lower bound of the buy zone, the upper bound of the take-profit zone); say it carries more weight than a near-edge touch. `standard` otherwise.
+- Action meanings: support broken, momentum easing = price is still under broken swing-low support, so even with momentum fading it is not a buy until a close back above the broken level; buy signal = touched the buy zone and bearish momentum faded for the required sessions in a row; bearish momentum easing = fading but no actionable signal yet; in buy zone, momentum still falling = do not buy yet; sell signal = touched the take-profit zone and bullish momentum faded for the required sessions; bullish momentum easing near the top = fading but no actionable signal yet; take-profit zone, momentum still rising = trail, do not guess the high.
 
 ### Bounce checklist
 - Seven checks, including whether bearish momentum is fading; `score` is how many passed. Name the checks that passed and the ones still missing, in plain words.
@@ -61,6 +63,8 @@ How to read a short-term row, in this order:
 6. **Verdict**: one sentence on what the row means for the trader.
 
 **Momentum signal rows** (`history.momentum_bottom`, `history.momentum_top`) replay every past signal as the trade the dashboard proposes: entry at the signal close, stop 0.25 ATR beyond the interim low (high), target 2x the risk, exit after 10 sessions otherwise. They are scored in R (profit or loss as a multiple of the amount risked); explain R once.
+- `momentum_follow_rate` vs `baseline_momentum_follow_rate`: how often momentum kept moving the expected way for 10 sessions after a signal (a valid signal), vs comparable days. Report it next to the price result; a valid momentum signal does not guarantee a profitable trade.
+- `by_strength.strong` / `by_strength.standard`: the same statistics split by whether price reached the far edge of the zone. `during_breakdown`: bottom signals that fired under broken support; they are not in the headline numbers. Quote these when the current signal is strong or the action is the support-broken wait.
 - The key comparison is `expectancy_r` vs `baseline_expectancy_r` (the same trade on any day); `edge_r` is the difference. Most trades end at the 10-session exit, so `success_rate` (target hit) is low by design; never compare it with 100%.
 - `held_rate` vs `baseline_held_rate`: how often the interim low (high) before the signal was not broken within 10 sessions, i.e. how often the signal caught a real turn. Contrast it with buying at the first zone touch, which usually sees a lower low.
 - `median_further_move_atr`: how much further price typically went against the entry before turning.
@@ -73,6 +77,12 @@ Never call a replay rate a probability or a prediction. Say "in past visits".
 - For each side, `adopted` says whether the tuned setting is in use, `reason` says why or why not, and `used.holdout` vs `default.holdout` is the 2021+ out-of-sample comparison. Quote the out-of-sample numbers, not the training ones.
 - When a side is tuned, `short_term.historical_edge` is graded on that out-of-sample record (`basis` starts with "out of sample"), while the momentum-signal rows in `history` cover the full history, including the years the settings were tuned on. Say so when you quote them.
 - Momentum speeds (`momentum.fast_span` / `slow_span`) and turn lengths differ by ticker; use the values in the JSON, never assume EMA5/13 or 2 sessions.
+
+### Weekly DCA (`weekly_dca`)
+- Each weekday row is a strategy that bought `amount` at the close every week. `average_cost` is total invested ÷ shares; `vs_average` compares it with the five-weekday average (−0.0018 → "0.18% cheaper"). Holiday buys moved to the next session (`holiday_moves`).
+- `best_weekday` is the cheapest in the calendar-week simulation. The earliest weekday tends to win that just by buying sooner while prices rise, so always pair it with `reliable`.
+- `reliable: true` means the trend-neutral measure (`vs_nearby`, close vs the 5 sessions centred on it) found a weekday (`trend_neutral_best`) that closed below its neighbours with t ≥ 2 in both halves of the history. Otherwise say no weekday was reliably cheaper and that buying every week matters far more than the day. Quote `best_value_gain` in dollars to show the scale.
+- `recent` is the same simulation over the last 52 weeks only (`best_weekday`, `matches_full_history`, `weekdays`). Mention whether the last year agreed with the full history, and say that 52 buys per weekday is too few to call a recent winner an edge.
 
 ### Trend outlook
 - `probability_bullish` is the headline. When `probability_source` is `base_rate`, it is only how often the ticker closed higher over that horizon historically. Say that plainly and do not call it a forecast.

@@ -328,6 +328,11 @@ def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParam
     rising, falling = _run_length(change > 0), _run_length(change < 0)
     touched_buy = (ohlc["low"] <= zones["st_buy_high"]).astype(float).rolling(signals.buy_touch, min_periods=1).max()
     touched_sell = (ohlc["high"] >= zones["st_sell_low"]).astype(float).rolling(signals.sell_touch, min_periods=1).max()
+    # A strong signal: within the touch window price reached the far edge of the zone (the lower
+    # bound of the buy zone, the upper bound of the take-profit zone), not just its near edge.
+    deep_buy = (ohlc["low"] <= zones["st_buy_low"]).astype(float).rolling(signals.buy_touch, min_periods=1).max()
+    deep_sell = (ohlc["high"] >= zones["st_sell_high"]).astype(float).rolling(signals.sell_touch, min_periods=1).max()
+    breakdown_active, breakdown_level = _active_breakdowns(ohlc)
     close, atr = ohlc["close"], zones["atr"]
     interim_low = ohlc["low"].rolling(INTERIM_SESSIONS, min_periods=1).min()
     interim_high = ohlc["high"].rolling(INTERIM_SESSIONS, min_periods=1).max()
@@ -341,6 +346,10 @@ def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParam
             "falling_sessions": falling,
             "touched_buy": touched_buy > 0,
             "touched_sell": touched_sell > 0,
+            "deep_buy": deep_buy > 0,
+            "deep_sell": deep_sell > 0,
+            "breakdown_active": breakdown_active,
+            "breakdown_level": breakdown_level,
             "buy_signal": (touched_buy > 0) & (momentum < 0) & (rising == signals.buy_turn),
             "sell_signal": (touched_sell > 0) & (momentum > 0) & (falling == signals.sell_turn),
             "interim_low": interim_low,
@@ -352,6 +361,37 @@ def momentum_frame(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParam
         },
         index=ohlc.index,
     )
+
+
+def _active_breakdowns(ohlc: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Per session, whether a support breakdown is active (as in breakdown_state) and the broken level.
+
+    Active = the most recent close below swing-low support happened within BREAKDOWN_ACTIVE_SESSIONS
+    and price is still below that level.
+    """
+    breaks, support = _breakdowns(ohlc)
+    sessions = np.arange(len(breaks))
+    last = np.maximum.accumulate(np.where(breaks, sessions, -1))
+    recent = (last >= 0) & (sessions - last < BREAKDOWN_ACTIVE_SESSIONS)
+    level = np.where(recent, support[np.clip(last, 0, None)], np.nan)
+    with np.errstate(invalid="ignore"):
+        active = recent & (ohlc["close"].to_numpy() < level)
+    return active, level
+
+
+def _momentum_followed(momentum: np.ndarray, i: int, horizon: int, side: str, window: int) -> bool | None:
+    """Momentum kept moving the expected way after session i.
+
+    Bottom (buy): momentum is higher `horizon` sessions later and never made a new low beyond the
+    trough of the `window` sessions up to the signal; a top (sell) mirrors it. None until `horizon`
+    sessions have passed.
+    """
+    if i + horizon > len(momentum) - 1:
+        return None
+    sign = 1 if side == "buy" else -1
+    extreme = np.nanmin(sign * momentum[max(i - window + 1, 0):i + 1])
+    later = sign * momentum[i + 1:i + 1 + horizon]
+    return bool(later[-1] > sign * momentum[i] and np.nanmin(later) >= extreme)
 
 
 def momentum_pivot(zones: pd.DataFrame, signals: SignalParams = DEFAULT_SIGNALS) -> float | None:
@@ -407,6 +447,7 @@ def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParam
             "reward_risk_now": clean_float(reward_risk, 2),
             # Still actionable while at least 1:1 remains from today's close.
             "active": reward_risk is not None and reward_risk >= 1.0,
+            "strength": "strong" if frame[f"deep_{side}"].iloc[i] else "standard",
         }
     return {
         "value_atr": clean_float(value, 2),
@@ -422,6 +463,8 @@ def momentum_state(ohlc: pd.DataFrame, zones: pd.DataFrame, signals: SignalParam
         "interim_high": clean_float(last["interim_high"], 2),
         "touched_buy_zone": bool(last["touched_buy"]),
         "touched_sell_zone": bool(last["touched_sell"]),
+        "reached_buy_zone_low": bool(last["deep_buy"]),
+        "reached_sell_zone_high": bool(last["deep_sell"]),
         "fast_span": signals.fast,
         "slow_span": signals.slow,
         "buy_touch_sessions": signals.buy_touch,
@@ -476,6 +519,9 @@ def signal_trades(
     interim = frame["interim_low" if side == "buy" else "interim_high"].to_numpy()
     atr = zones["atr"].to_numpy()
     trend_up = (ohlc["close"] > zones["ma200"]).to_numpy()
+    momentum = frame["momentum"].to_numpy()
+    deep = frame[f"deep_{side}"].to_numpy()
+    breakdown_active, breakdown_level = frame["breakdown_active"].to_numpy(), frame["breakdown_level"].to_numpy()
     episodes: list[dict] = []
     last = -SIGNAL_GAP_SESSIONS - 1
     for i in np.flatnonzero(frame[f"{side}_signal"].to_numpy()):
@@ -497,7 +543,12 @@ def signal_trades(
                 "stop": float(stops[i]),
                 "target": float(targets[i]),
                 "interim_extreme": float(interim[i]),
-                "momentum": float(frame["momentum"].iloc[i]),
+                "momentum": float(momentum[i]),
+                "strength": "strong" if deep[i] else "standard",
+                # Bottom signals that fire while a support breakdown is still active are not recommended.
+                "during_breakdown": bool(side == "buy" and breakdown_active[i]),
+                "breakdown_level": float(breakdown_level[i]) if side == "buy" and breakdown_active[i] else None,
+                "momentum_followed": _momentum_followed(momentum, int(i), horizon, side, signals.touch(side)),
                 "outcome": outcome,
                 "success": outcome == "success",
                 "complete": complete,
@@ -511,8 +562,14 @@ def signal_trades(
     return episodes
 
 
-def baseline_trades(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon: int = SHORT_TERM_HORIZON) -> pd.DataFrame:
-    """The same trade taken at every session's close (once the zones exist), indexed by entry date."""
+def baseline_trades(
+    ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon: int = SHORT_TERM_HORIZON, signals: SignalParams = DEFAULT_SIGNALS,
+) -> pd.DataFrame:
+    """The same trade taken at every session's close (once the zones exist), indexed by entry date.
+
+    momentum_followed is the follow-through check from every session whose momentum is on the
+    signal's side of zero (bearish for bottoms, bullish for tops), and NaN on the others.
+    """
     frame = momentum_frame(ohlc, zones)
     opens, highs, lows, closes = (ohlc[column].to_numpy() for column in ("open", "high", "low", "close"))
     stops, targets = frame[f"{side}_stop"].to_numpy(), frame[f"{side}_target"].to_numpy()
@@ -520,13 +577,54 @@ def baseline_trades(ohlc: pd.DataFrame, zones: pd.DataFrame, side: str, horizon:
     band = zones["st_buy_high" if side == "buy" else "st_sell_low"].to_numpy()
     valid = np.flatnonzero(np.isfinite(band) & np.isfinite(stops) & np.isfinite(zones["atr"].to_numpy()))
     days = [int(i) for i in valid if i + horizon <= len(closes) - 1]
+    momentum = zones["momentum"].to_numpy()
+    sign = 1 if side == "buy" else -1
+    followed = [
+        float(_momentum_followed(momentum, i, horizon, side, signals.touch(side))) if sign * momentum[i] < 0 else np.nan
+        for i in days
+    ]
     return pd.DataFrame(
         {
             "r_multiple": [_trade_r(opens, highs, lows, closes, i, horizon, stops[i], targets[i], side)[1] for i in days],
             "held": [_held(lows, highs, interim, i, horizon, side) for i in days],
+            "momentum_followed": followed,
         },
         index=ohlc.index[days],
     )
+
+
+def _signal_summary(episodes: list[dict]) -> dict:
+    """Results of a set of replayed signals (graded ones only)."""
+    graded = [episode for episode in episodes if episode["complete"]]
+    results = [episode["r_multiple"] for episode in graded]
+    followed = [episode["momentum_followed"] for episode in graded if episode["momentum_followed"] is not None]
+    return {
+        "episodes": len(graded),
+        "sufficient_sample": len(graded) >= MIN_EPISODES,
+        "expectancy_r": clean_float(float(np.mean(results)) if results else None, 2),
+        "median_r": clean_float(_median(results), 2),
+        "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
+        "stop_rate": clean_float(_rate([episode["outcome"] == "failed" for episode in graded])),
+        "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
+        "held_rate": clean_float(_rate([episode["held"] for episode in graded])),
+        "momentum_follow_rate": clean_float(_rate(followed)),
+        "median_further_move_atr": clean_float(_median([episode["further_move_atr"] for episode in graded]), 2),
+        "median_days_to_target": clean_float(
+            _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
+        ),
+    }
+
+
+def _versus_baseline(summary: dict, baseline: dict) -> dict:
+    """Attach the any-day comparison to a summary."""
+    expectancy, base = summary["expectancy_r"], baseline["expectancy_r"]
+    return {
+        **summary,
+        "baseline_expectancy_r": base,
+        "edge_r": clean_float(expectancy - base, 2) if expectancy is not None and base is not None else None,
+        "baseline_held_rate": baseline["held_rate"],
+        "baseline_momentum_follow_rate": baseline["momentum_follow_rate"],
+    }
 
 
 def momentum_signal_study(
@@ -536,47 +634,46 @@ def momentum_signal_study(
 
     Entry is the signal session's close, the stop sits beyond the interim low (high), and the
     target is TARGET_R times the risk; each trade ends at the target, the stop, or after `horizon`
-    sessions. The baseline makes the same trade from every session's close, so the edge shows
-    whether waiting for momentum to fade beat entering on an arbitrary day. "Held" = the interim
-    low (high) was not broken within `horizon` sessions, i.e. the signal caught a real turn.
+    sessions. The baseline makes the same trade from every session's close.
+
+    Two checks grade each signal: the price trade (in R, and whether the interim low/high held),
+    and whether momentum kept moving the expected way over the next `horizon` sessions. Headline
+    numbers cover the signals the dashboard recommends; bottom signals that fire during an active
+    support breakdown are reported separately, and strong (far edge of the zone reached) and
+    standard signals are split out.
     """
     episodes = signal_trades(ohlc, zones, side, signals, horizon)
-    baseline = baseline_trades(ohlc, zones, side, horizon)
-    graded = [episode for episode in episodes if episode["complete"]]
-    results = [episode["r_multiple"] for episode in graded]
-    expectancy = float(np.mean(results)) if results else None
-    baseline_expectancy = float(baseline["r_multiple"].mean()) if len(baseline) else None
+    baseline_frame = baseline_trades(ohlc, zones, side, horizon, signals)
+    baseline = {
+        "expectancy_r": clean_float(float(baseline_frame["r_multiple"].mean()) if len(baseline_frame) else None, 2),
+        "held_rate": clean_float(float(baseline_frame["held"].mean()) if len(baseline_frame) else None),
+        "momentum_follow_rate": clean_float(float(baseline_frame["momentum_followed"].mean()) if baseline_frame["momentum_followed"].notna().any() else None),
+    }
+    actionable = [episode for episode in episodes if not episode["during_breakdown"]]
     current_trend_up = bool(ohlc["close"].iloc[-1] > zones["ma200"].iloc[-1])
     extreme = "low" if side == "buy" else "high"
+    far_edge = "lower bound of the buy zone" if side == "buy" else "upper bound of the take-profit zone"
     return {
         "side": side,
         "horizon_sessions": horizon,
         "target_r": TARGET_R,
-        "episodes": len(graded),
-        "sufficient_sample": len(graded) >= MIN_EPISODES,
-        "success_rate": clean_float(_rate([episode["success"] for episode in graded])),
-        "stop_rate": clean_float(_rate([episode["outcome"] == "failed" for episode in graded])),
-        "expired_rate": clean_float(_rate([episode["outcome"] == "expired" for episode in graded])),
-        "expectancy_r": clean_float(expectancy, 2),
-        "median_r": clean_float(_median(results), 2),
-        "baseline_expectancy_r": clean_float(baseline_expectancy, 2),
-        "edge_r": (
-            clean_float(expectancy - baseline_expectancy, 2) if expectancy is not None and baseline_expectancy is not None else None
-        ),
-        "held_rate": clean_float(_rate([episode["held"] for episode in graded])),
-        "baseline_held_rate": clean_float(_rate(list(baseline["held"]))),
-        "median_further_move_atr": clean_float(_median([episode["further_move_atr"] for episode in graded]), 2),
-        "median_days_to_target": clean_float(
-            _median([episode["days_to_target"] for episode in graded if episode["days_to_target"] is not None]), 1
-        ),
-        "by_trend": _summarize_context(episodes, current_trend_up),
+        **_versus_baseline(_signal_summary(actionable), baseline),
+        "by_strength": {
+            strength: _versus_baseline(_signal_summary([episode for episode in actionable if episode["strength"] == strength]), baseline)
+            for strength in ("strong", "standard")
+        },
+        "during_breakdown": _versus_baseline(_signal_summary([episode for episode in episodes if episode["during_breakdown"]]), baseline),
+        "by_trend": _summarize_context(actionable, current_trend_up),
         "definition": (
             f"Signal = within {signals.touch(side)} sessions of a {'buy' if side == 'buy' else 'take-profit'}-zone touch, "
             f"momentum (EMA{signals.fast} - EMA{signals.slow}) {'rose' if side == 'buy' else 'fell'} {signals.turn(side)} "
-            f"session(s) in a row while still {'bearish' if side == 'buy' else 'bullish'}. Entry at that close; stop "
-            f"{STOP_BUFFER_ATR:g} ATR beyond the {INTERIM_SESSIONS}-session {extreme}; target {TARGET_R:g}x the risk; otherwise "
-            f"exit after {horizon} sessions. Results are in R (multiples of the risk). Held = the interim {extreme} was not "
-            f"broken within {horizon} sessions. Baseline = the same trade from every session's close."
+            f"session(s) in a row while still {'bearish' if side == 'buy' else 'bullish'}. Strong = price also reached the "
+            f"{far_edge}. Entry at that close; stop {STOP_BUFFER_ATR:g} ATR beyond the {INTERIM_SESSIONS}-session {extreme}; "
+            f"target {TARGET_R:g}x the risk; otherwise exit after {horizon} sessions. Momentum followed through = "
+            f"{horizon} sessions later momentum had kept {'rising' if side == 'buy' else 'falling'} with no new "
+            f"{'low' if side == 'buy' else 'high'} beyond the one before the signal. Baselines = the same trade from every "
+            f"session's close, and the momentum check from every session with {'bearish' if side == 'buy' else 'bullish'} momentum."
+            + (" Signals during an active support breakdown are counted separately, not in the headline." if side == "buy" else "")
         ),
         "recent_episodes": episodes,
     }

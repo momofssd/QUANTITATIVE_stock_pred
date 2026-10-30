@@ -1,5 +1,6 @@
 import { useState } from "react";
 import AiPanel from "./components/AiPanel";
+import DcaPanel from "./components/DcaPanel";
 import MarketChart from "./components/MarketChart";
 import {
   EvidenceTables,
@@ -196,6 +197,7 @@ export default function App() {
                 <MarketChart chart={report.chart_data} shortTerm={shortTerm} />
                 <ReasonsPanel shortTerm={shortTerm} />
                 <EvidenceTables shortTerm={shortTerm} />
+                <DcaPanel dca={report.weekly_dca} />
                 <section className="details-grid">
                   <article className="panel">
                     <h2>Technical snapshot</h2>

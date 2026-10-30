@@ -10,12 +10,16 @@ from src.entry_zones import (
     _rsi,
     adjusted_ohlcv,
     breakdown_study,
+    _active_breakdowns,
+    _momentum_followed,
+    breakdown_state,
     compute_zone_frame,
     momentum_frame,
     momentum_pivot,
     momentum_signal_study,
     position_in_zone,
     reversion_study,
+    swing_levels,
     swing_support,
 )
 from src.features import build_features
@@ -45,6 +49,7 @@ def _ohlcv(sessions: int, seed: int = 7, drift: float = 0.0004) -> pd.DataFrame:
 ACTIONS = {
     "TOP_SIGNAL", "TOP_FORMING", "TAKE_PROFIT_ZONE", "SUPPORT_BREAKDOWN", "BOTTOM_SIGNAL", "BOTTOM_FORMING",
     "ENTRY_ZONE_STILL_FALLING", "BELOW_ENTRY_ZONE", "APPROACHING_ENTRY", "BOUNCE_UNDERWAY", "WAIT_FOR_PULLBACK",
+    "BREAKDOWN_MOMENTUM_EASING",
 }
 
 
@@ -330,7 +335,7 @@ def test_dip_whose_bearish_momentum_fades_for_two_sessions_is_a_bottom_signal():
     momentum = short_term["momentum"]
     assert momentum["phase"] == "BEARISH_FADING" and momentum["rising_sessions"] >= 2
     assert momentum["signal"]["side"] == "buy" and momentum["signal"]["active"]
-    assert short_term["action"] in {"BOTTOM_SIGNAL", "SUPPORT_BREAKDOWN"}
+    assert short_term["action"] in {"BOTTOM_SIGNAL", "SUPPORT_BREAKDOWN", "BREAKDOWN_MOMENTUM_EASING"}
     if short_term["action"] == "BOTTOM_SIGNAL":
         plan = short_term["trade_plan"]
         assert plan["stop_loss"] < momentum["interim_low"] < plan["entry_reference"] < plan["target_1"]
@@ -343,3 +348,59 @@ def test_dip_still_falling_is_not_a_buy():
     assert short_term["momentum"]["signal"] is None
     assert short_term["action"] in {"ENTRY_ZONE_STILL_FALLING", "BELOW_ENTRY_ZONE", "SUPPORT_BREAKDOWN"}
     assert short_term["tone"] != "positive" and not short_term["is_entry_now"]
+
+
+def test_momentum_follow_through_needs_higher_momentum_and_no_new_low():
+    trough_then_recovery = np.array([-1.0, -2.0, -1.5] + [-1.2, -1.0, -0.8, -0.5, -0.2, 0.1, 0.3, 0.4, 0.5, 0.6])
+    assert _momentum_followed(trough_then_recovery, 2, 10, "buy", 3) is True
+    relapse = trough_then_recovery.copy()
+    relapse[6] = -2.5  # a new momentum low below the pre-signal trough fails the check
+    assert _momentum_followed(relapse, 2, 10, "buy", 3) is False
+    assert _momentum_followed(trough_then_recovery, 5, 10, "buy", 3) is None  # not enough sessions yet
+    assert _momentum_followed(-trough_then_recovery, 2, 10, "sell", 3) is True
+
+
+def test_active_breakdown_series_matches_the_live_breakdown_state():
+    features, _ = _breakdown_features(0.935)
+    ohlc = adjusted_ohlcv(features)
+    zones = compute_zone_frame(ohlc)
+    active, level = _active_breakdowns(ohlc)
+    state = breakdown_state(ohlc, zones, swing_levels(ohlc))
+    assert bool(active[-1]) == state["active"]
+    assert level[-1] == pytest.approx(state["broken_level"], abs=0.01)
+
+
+def test_signal_replay_splits_strength_and_keeps_breakdown_signals_out_of_the_headline():
+    ohlc = adjusted_ohlcv(_features(sessions=2500))
+    zones = compute_zone_frame(ohlc)
+    study = momentum_signal_study(ohlc, zones, "buy")
+    episodes = [episode for episode in study["recent_episodes"] if episode["complete"]]
+    actionable = [episode for episode in episodes if not episode["during_breakdown"]]
+    assert study["episodes"] == len(actionable)
+    assert study["by_strength"]["strong"]["episodes"] + study["by_strength"]["standard"]["episodes"] == len(actionable)
+    assert study["during_breakdown"]["episodes"] == len(episodes) - len(actionable)
+    assert 0 <= study["momentum_follow_rate"] <= 1 and 0 <= study["baseline_momentum_follow_rate"] <= 1
+    lows, buy_low = ohlc["low"].to_numpy(), zones["st_buy_low"].to_numpy()
+    for episode in study["recent_episodes"]:
+        i = episode["index"]
+        reached = bool((lows[i - 4:i + 1] <= buy_low[i - 4:i + 1]).any())
+        assert (episode["strength"] == "strong") == reached
+
+
+def test_broken_support_with_fading_momentum_waits_for_a_reclaim():
+    # Dip to a swing low, rally, slide through that support, then turn up while still under it.
+    features = _features()
+    tail = [1.0, 0.98, 0.96, 0.94, 0.93, 0.935, 0.94]
+    base = float(features["Close"].iloc[-(len(tail) + 20)])
+    path = [1.0 - 0.01 * step for step in range(6)] + [0.95 + 0.01 * step for step in range(1, 8)] + [1.02] * 6 + tail
+    closes = base * np.array(path)
+    rows = features.index[-len(closes):]
+    for column, values in (("Open", closes), ("High", closes * 1.002), ("Low", closes * 0.998), ("Close", closes), ("Adj Close", closes)):
+        features.loc[rows, column] = values
+    features["close"] = features["Adj Close"]
+    short_term = build_zone_report(features, ticker="test")["short_term"]
+    assert short_term["breakdown"]["active"]
+    assert short_term["momentum"]["phase"] == "BEARISH_FADING"
+    assert short_term["action"] == "BREAKDOWN_MOMENTUM_EASING"
+    assert not short_term["is_entry_now"] and short_term["tone"] != "positive"
+    assert short_term["trade_plan"]["entry_reference"] == short_term["breakdown"]["broken_level"]
